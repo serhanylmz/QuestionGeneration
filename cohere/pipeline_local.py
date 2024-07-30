@@ -5,6 +5,12 @@ from transformers import pipeline
 from typing import List, Tuple
 import os
 from dotenv import load_dotenv
+import logging
+import json
+
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 load_dotenv()  # This loads the variables from .env
 
@@ -17,31 +23,40 @@ def generate_questions(context: str, answer: str) -> List[str]:
     """
     Step 1: Generate 5 questions using Cohere's structured output.
     """
-    response = co.chat(
-        model="command-r",
-        message=f"Based on this context: '{context}' and answer: '{answer}', generate 5 diverse questions which when asked to the context returns the answer.",
-        response_format={
-            "type": "json_object",
-            "schema": {
-                "type": "object",
-                "required": ["question1", "question2", "question3", "question4", "question5"],
-                "properties": {
-                    "question1": {"type": "string"},
-                    "question2": {"type": "string"},
-                    "question3": {"type": "string"},
-                    "question4": {"type": "string"},
-                    "question5": {"type": "string"}
+    try:
+        response = co.chat(
+            model="command-r",
+            message=f"Based on this context: '{context}' and answer: '{answer}', generate 5 diverse questions which when asked to the context returns the answer.",
+            response_format={
+                "type": "json_object",
+                "schema": {
+                    "type": "object",
+                    "required": ["question1", "question2", "question3", "question4", "question5"],
+                    "properties": {
+                        "question1": {"type": "string"},
+                        "question2": {"type": "string"},
+                        "question3": {"type": "string"},
+                        "question4": {"type": "string"},
+                        "question5": {"type": "string"}
+                    }
                 }
             }
-        }
-    )
-    
-    json_response = response.text
-    import json
-    parsed_response = json.loads(json_response)
-    questions = [parsed_response[f"question{i}"] for i in range(1, 6)]
-    
-    return questions
+        )
+        
+        json_response = response.text
+        logger.info(f"Raw JSON response: {json_response}")
+        
+        try:
+            parsed_response = json.loads(json_response)
+            questions = [parsed_response[f"question{i}"] for i in range(1, 6)]
+            return questions
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse JSON: {e}")
+            logger.error(f"Raw response: {json_response}")
+            return [f"Failed to generate question {i}" for i in range(1, 6)]
+    except Exception as e:
+        logger.error(f"Error in generate_questions: {e}")
+        return [f"Failed to generate question {i}" for i in range(1, 6)]
 
 def calculate_structural_diversity(questions: List[str]) -> List[float]:
     """
