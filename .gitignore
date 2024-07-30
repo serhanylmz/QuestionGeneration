@@ -1,0 +1,42 @@
+# Environment Variables
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.so
+
+# Virtual Environment
+venv/
+env/
+.venv/
+
+# IDEs and Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Operating System Files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Build files
+build/
+dist/
+*.egg-info/
+
+# Database files
+*.db
+*.sqlite3
+
+# Backup files
+*.bak
+
+# Other sensitive or project-specific files
+config.ini
+secrets.json
+credentials.yml
