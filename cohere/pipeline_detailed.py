@@ -5,7 +5,7 @@ from typing import List, Dict, Tuple
 import json
 
 # Initialize Cohere client and SentenceTransformer model
-co = cohere.Client(api_key="mnaIgyCBDww5sJkiyKe7SqfroWWq9whuknczPxL2")
+co = cohere.Client(api_key="API_KEY")
 sentence_model = SentenceTransformer('all-MiniLM-L6-v2')
 
 def generate_questions(context: str, answer: str) -> List[str]:
