@@ -3,9 +3,13 @@ import numpy as np
 from sentence_transformers import SentenceTransformer
 from transformers import pipeline
 from typing import List, Tuple
+import os
+from dotenv import load_dotenv
+
+load_dotenv()  # This loads the variables from .env
 
 # Initialize Cohere client, SentenceTransformer model, and QA pipeline
-co = cohere.Client(api_key="mnaIgyCBDww5sJkiyKe7SqfroWWq9whuknczPxL2")
+co = cohere.Client(api_key = os.environ.get("COHERE_API_KEY"))
 sentence_model = SentenceTransformer('all-MiniLM-L6-v2')
 qa_pipeline = pipeline("question-answering", model="distilbert-base-cased-distilled-squad")
 

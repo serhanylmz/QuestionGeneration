@@ -2,9 +2,13 @@ import cohere
 import numpy as np
 from sentence_transformers import SentenceTransformer
 from typing import List, Dict, Tuple
+import os
+from dotenv import load_dotenv
 
-# Initialize Cohere client and SentenceTransformer model
-co = cohere.Client(api_key="API_KEY")
+load_dotenv()  # This loads the variables from .env
+
+# Initialize Cohere client, SentenceTransformer model, and QA pipeline
+co = cohere.Client(api_key = os.environ.get("COHERE_API_KEY"))
 sentence_model = SentenceTransformer('all-MiniLM-L6-v2')
 
 def generate_questions(context: str, answer: str) -> List[str]:
