@@ -4,7 +4,7 @@ from sentence_transformers import SentenceTransformer
 from typing import List, Dict, Tuple
 
 # Initialize Cohere client and SentenceTransformer model
-co = cohere.Client(api_key="<API_KEY>")
+co = cohere.Client(api_key="mnaIgyCBDww5sJkiyKe7SqfroWWq9whuknczPxL2")
 sentence_model = SentenceTransformer('all-MiniLM-L6-v2')
 
 def generate_questions(context: str, answer: str) -> List[str]:

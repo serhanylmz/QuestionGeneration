@@ -1,12 +1,13 @@
 import cohere
 import numpy as np
 from sentence_transformers import SentenceTransformer
-from typing import List, Dict, Tuple
-import json
+from transformers import pipeline
+from typing import List, Tuple
 
-# Initialize Cohere client and SentenceTransformer model
-co = cohere.Client(api_key="mnaIgyCBDww5sJkiyKe7SqfroWWq9whuknczPxL2")
+# Initialize Cohere client, SentenceTransformer model, and QA pipeline
+co = cohere.Client(api_key="API_KEY")
 sentence_model = SentenceTransformer('all-MiniLM-L6-v2')
+qa_pipeline = pipeline("question-answering", model="distilbert-base-cased-distilled-squad")
 
 def generate_questions(context: str, answer: str) -> List[str]:
     """
@@ -32,6 +33,7 @@ def generate_questions(context: str, answer: str) -> List[str]:
     )
     
     json_response = response.text
+    import json
     parsed_response = json.loads(json_response)
     questions = [parsed_response[f"question{i}"] for i in range(1, 6)]
     
@@ -77,10 +79,8 @@ def check_answer_precision(context: str, questions: List[str], original_answer: 
     precision_scores = []
     generated_answers = []
     for question in questions:
-        generated_answer = co.chat(
-            model="command",
-            message=f"Context: {context}\nQuestion: {question}\nProvide a brief answer based only on the given context."
-        ).text
+        result = qa_pipeline(question=question, context=context)
+        generated_answer = result['answer']
         generated_answers.append(generated_answer)
         answer_embedding = sentence_model.encode(original_answer)
         generated_embedding = sentence_model.encode(generated_answer)
