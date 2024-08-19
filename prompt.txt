@@ -1,0 +1,14 @@
+Now, our aim is to make a creative paraphrasing model with scaled data for better performance. Firstly, tell me about all paraphrasing datasets you know, and we'll gather them together. 
+We'll first create a new dataset with this data. This paraphrasing dataset will contain 2 columns: "original" and "paraphrased". For every row, these columns will hold string data, and will contain the original sentence, and a paraphrased version of this sentence. 
+After we're done with this, we'll adapt the current code to work on this dataset and create us a great paraphraser. 
+Now, in order to enable the paraphraser for diverse generation, I need your suggestions. We must make it so that this paraphraser creates quite diverse of an output. 
+For example: 
+1) Original sentence: I was teaching a class today. 
+Paraphrased sentence: Today, I was lecturing a class for a group of students.
+2) Original sentence: The fruit is becoming expensive at the grocery store.
+Paraphrased sentence:  At the grocery, fruit is becoming more expensive by day.
+3) Original sentence: Who was the guy going to the movie theater tonight?
+Paraphrased sentence: Some guy was going to the movies tonight, who was he?
+We must achieve this levels of awesome generation. As you see, the outputs must be semantically rather similar, yet structurally different. 
+To achieve this, I am open to your suggestions. This could be training with some other data, training twice with different data, creating different loss functions like chrF, levenshtein distance, metrics for semantic similarity and so forth. I am open to anything that comes to your mind, and would appreciate it if you could give me advice beyond these too. 
+Let's begin!

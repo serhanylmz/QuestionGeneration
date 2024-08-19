@@ -1,0 +1,7 @@
+gradio
+cohere
+numpy
+sentence-transformers
+transformers
+python-dotenv
+pandas
