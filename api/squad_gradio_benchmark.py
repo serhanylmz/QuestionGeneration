@@ -8,11 +8,10 @@ import random
 from openai import OpenAI
 from typing import List, Tuple, Dict
 from dotenv import load_dotenv
-from transformers import pipeline
 import asyncio
 
 # Import the required functions from the pipeline file
-from pipeline_gradio_experimental import generate_single_question, rank_questions_with_details
+from pipeline_gradio_experimental import generate_basic_question, rank_questions_with_details, generate_answer
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -25,42 +24,38 @@ load_dotenv()
 client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
 # Load the SQuAD dataset
-dataset = load_dataset("squad")
-
-# Initialize the question answering pipeline
-qa_pipeline = pipeline("question-answering", model="deepset/roberta-base-squad2")
+dataset = load_dataset("rajpurkar/squad")
 
 def get_random_entry():
     random_index = random.randint(0, len(dataset['train']) - 1)
     entry = dataset['train'][random_index]
     return entry['context'], entry['answers']['text'][0], entry['question']
 
-def generate_answer(context: str, question: str) -> str:
-    try:
-        result = qa_pipeline(question=question, context=context)
-        return result['answer']
-    except Exception as e:
-        logger.error(f"Error in generate_answer: {e}")
-        return "Failed to generate answer"
-
-def compare_questions(context: str, original_answer: str, question1: str, answer1: str, question2: str, answer2: str) -> Dict[str, any]:
+def compare_questions(context: str, original_question: str, original_answer: str, basic_question: str, basic_answer: str, enhanced_question: str, enhanced_answer: str) -> Dict[str, any]:
     try:
         response = client.chat.completions.create(
             model="gpt-4o-2024-08-06",
             messages=[
                 {"role": "system", "content": "You are an expert in evaluating question-answer pairs based on a given context."},
-                {"role": "user", "content": f"""Compare the following two question-answer pairs based on the given context and original answer. Evaluate their quality and relevance.
+                {"role": "user", "content": f"""Compare the following two generated question-answer pairs based on the given context and the original question-answer pair. Evaluate their quality and relevance.
 
 Context: {context}
+
+Original Question: {original_question}
 Original Answer: {original_answer}
 
-Question 1: {question1}
-Answer 1: {answer1}
+Basic Generated Question: {basic_question}
+Basic Generated Answer: {basic_answer}
 
-Question 2: {question2}
-Answer 2: {answer2}
+Enhanced Generated Question: {enhanced_question}
+Enhanced Generated Answer: {enhanced_answer}
 
-Score each question-answer pair on a scale of 0 to 10 based on the quality and relevance of the question and answer. Provide an explanation for your evaluation. Focus on how well the new answer matches the old answer considering the context. Make sure to grade one higher than the other."""}
+Evaluate the basic and enhanced generated questions based on the following criteria:
+1. Structural difference from the original question
+2. Semantic similarity to the original question
+3. How well the generated answer matches the original answer
+
+Score each generated question-answer pair on a scale of 0 to 10. Provide a detailed explanation for your evaluation, addressing each of the criteria mentioned above. Finally, determine which generation approach (Basic or Enhanced) is better overall and explain why."""}
             ],
             response_format={
                 "type": "json_schema",
@@ -70,11 +65,12 @@ Score each question-answer pair on a scale of 0 to 10 based on the quality and r
                     "schema": {
                         "type": "object",
                         "properties": {
-                            "question1_score": {"type": "number"},
-                            "question2_score": {"type": "number"},
-                            "explanation": {"type": "string"}
+                            "basic_score": {"type": "number"},
+                            "enhanced_score": {"type": "number"},
+                            "explanation": {"type": "string"},
+                            "winner": {"type": "string", "enum": ["Basic", "Enhanced"]}
                         },
-                        "required": ["question1_score", "question2_score", "explanation"],
+                        "required": ["basic_score", "enhanced_score", "explanation", "winner"],
                         "additionalProperties": False
                     }
                 }
@@ -83,66 +79,90 @@ Score each question-answer pair on a scale of 0 to 10 based on the quality and r
         return json.loads(response.choices[0].message.content)
     except Exception as e:
         logger.error(f"Error in comparing questions: {e}")
-        return {"question1_score": 0, "question2_score": 0, "explanation": "Failed to compare questions"}
+        return {"basic_score": 0, "enhanced_score": 0, "explanation": "Failed to compare questions", "winner": "None"}
 
-async def process_entry(context, answer, progress=gr.Progress()):
+async def process_entry(context, answer, initial_question, progress=gr.Progress()):
     progress(0, desc="Starting process...")
     await asyncio.sleep(1)
     
-    progress(0.2, desc="Generating questions...")
-    basic_question = generate_single_question(context, answer, [])
-    _, _, enhanced_question = rank_questions_with_details(context, answer)
+    progress(0.2, desc="Generating basic question...")
+    basic_question = generate_basic_question(context, answer, initial_question)
     
-    progress(0.4, desc="Generating answers...")
+    progress(0.4, desc="Generating enhanced question...")
+    detailed_scores, rankings, enhanced_question = rank_questions_with_details(context, answer, initial_question)
+    
+    progress(0.6, desc="Generating answers...")
     basic_answer = generate_answer(context, basic_question)
     enhanced_answer = generate_answer(context, enhanced_question)
     
-    progress(0.6, desc="Comparing questions...")
-    comparison_result = compare_questions(context, answer, basic_question, basic_answer, enhanced_question, enhanced_answer)
-    
-    winner = "Basic" if comparison_result["question1_score"] > comparison_result["question2_score"] else "Enhanced"
+    progress(0.8, desc="Comparing questions...")
+    comparison_result = compare_questions(context, initial_question, answer, basic_question, basic_answer, enhanced_question, enhanced_answer)
     
     progress(1.0, desc="Process complete!")
     return (
-        f"Question: {basic_question}\nAnswer: {basic_answer}",
-        f"Question: {enhanced_question}\nAnswer: {enhanced_answer}",
-        f"Question 1 Score: {comparison_result['question1_score']}\n"
-        f"Question 2 Score: {comparison_result['question2_score']}\n"
+        detailed_scores,
+        rankings[0],  # Edit Distance Ranking
+        rankings[1],  # Semantic Similarity Ranking
+        rankings[2],  # Answer Precision Ranking
+        rankings[3],  # Composite Score Ranking
+        f"Original Question: {initial_question}\nOriginal Answer: {answer}",
+        f"Basic Question: {basic_question}\nBasic Answer: {basic_answer}",
+        f"Enhanced Question: {enhanced_question}\nEnhanced Answer: {enhanced_answer}",
+        f"Basic Generation Score: {comparison_result['basic_score']}\n"
+        f"Enhanced Generation Score: {comparison_result['enhanced_score']}\n"
         f"Explanation: {comparison_result['explanation']}\n"
-        f"Winner: {winner} Generation"
+        f"Winner: {comparison_result['winner']} Generation"
     )
 
 # Create Gradio interface
 with gr.Blocks(theme=gr.themes.Default()) as iface:
-    gr.Markdown("# Question Generation and Comparison")
-    gr.Markdown("Enter a context and answer, or click 'Random' to get a random entry from the SQuAD dataset.")
+    gr.Markdown("# Enhanced Question Generation and Comparison")
+    gr.Markdown("Enter a context, answer, and initial question, or click 'Random' to get a random entry from the SQuAD dataset.")
     
     with gr.Row():
         with gr.Column(scale=2):
             context_input = gr.Textbox(label="Context", lines=10)
             answer_input = gr.Textbox(label="Answer", lines=2)
+            initial_question_input = gr.Textbox(label="Initial Question", lines=2)
             with gr.Row():
                 submit_button = gr.Button("Submit")
                 random_button = gr.Button("Random")
         
         with gr.Column(scale=3):
-            original_question_output = gr.Textbox(label="Original Question from Dataset", lines=2)
+            detailed_scores_output = gr.DataFrame(label="Detailed Scores")
+            with gr.Row():
+                edit_distance_ranking_output = gr.DataFrame(label="Edit Distance Ranking")
+                semantic_similarity_ranking_output = gr.DataFrame(label="Semantic Similarity Ranking")
+            with gr.Row():
+                answer_precision_ranking_output = gr.DataFrame(label="Answer Precision Ranking")
+                composite_ranking_output = gr.DataFrame(label="Composite Score Ranking")
+            original_output = gr.Textbox(label="Original Question and Answer", lines=4)
             basic_generation_output = gr.Textbox(label="Basic Generation", lines=4)
             enhanced_generation_output = gr.Textbox(label="Enhanced Generation", lines=4)
-            comparison_result_output = gr.Textbox(label="Comparison Result", lines=6)
+            comparison_result_output = gr.Textbox(label="Comparison Result", lines=8)
 
-    async def on_submit(context, answer):
-        return await process_entry(context, answer)
+    async def on_submit(context, answer, initial_question):
+        return await process_entry(context, answer, initial_question)
 
     async def on_random():
-        context, answer, question = get_random_entry()
-        results = await process_entry(context, answer)
-        return [context, answer, question] + list(results)
+        context, answer, initial_question = get_random_entry()
+        results = await process_entry(context, answer, initial_question)
+        return [context, answer, initial_question] + list(results)
 
     submit_button.click(
         fn=on_submit,
-        inputs=[context_input, answer_input],
-        outputs=[basic_generation_output, enhanced_generation_output, comparison_result_output]
+        inputs=[context_input, answer_input, initial_question_input],
+        outputs=[
+            detailed_scores_output,
+            edit_distance_ranking_output,
+            semantic_similarity_ranking_output,
+            answer_precision_ranking_output,
+            composite_ranking_output,
+            original_output,
+            basic_generation_output,
+            enhanced_generation_output,
+            comparison_result_output
+        ]
     )
 
     random_button.click(
@@ -150,7 +170,13 @@ with gr.Blocks(theme=gr.themes.Default()) as iface:
         outputs=[
             context_input,
             answer_input,
-            original_question_output,
+            initial_question_input,
+            detailed_scores_output,
+            edit_distance_ranking_output,
+            semantic_similarity_ranking_output,
+            answer_precision_ranking_output,
+            composite_ranking_output,
+            original_output,
             basic_generation_output,
             enhanced_generation_output,
             comparison_result_output
