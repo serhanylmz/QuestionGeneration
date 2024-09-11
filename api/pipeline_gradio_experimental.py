@@ -22,7 +22,7 @@ load_dotenv()
 client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
 # Load the dataset
-dataset = load_dataset("serhany/scaling-qa")
+dataset = load_dataset("rajpurkar/squad")
 
 # Define sample inputs
 samples = [
@@ -140,18 +140,12 @@ def generate_answer(context: str, question: str) -> str:
         response = client.chat.completions.create(
             model="gpt-4o-2024-08-06",
             messages=[
-                {"role": "system", "content": "You are a helpful assistant that provides concise and clear answers based on the given context."},
-                {"role": "user", "content": f"""Context: The Eiffel Tower, located in Paris, France, is one of the most famous landmarks in the world.
-Question: Where is the Eiffel Tower located?
-Answer: Paris, France
+                {"role": "system", "content": "You are a precise answer generator. Your task is to provide concise, accurate answers based on the given context. Focus on the key information that directly answers the question, even if the phrasing differs from the context."},
+                {"role": "user", "content": f"""Context: {context}
 
-Context: The Great Wall of China is a series of fortifications and walls built across the historical northern borders of ancient Chinese states and Imperial China.
-Question: What is the Great Wall of China?
-Answer: A series of fortifications and walls in northern China
-
-Context: {context}
 Question: {question}
-Answer: Provide a concise and clear answer to the question based on the given context."""}
+
+Generate a concise and accurate answer to the question based on the given context. Focus on the core information that answers the question. Provide only the answer, without any explanation or additional text."""}
             ],
             response_format={
                 "type": "json_schema",
@@ -241,12 +235,23 @@ def check_answer_precision(context: str, questions: List[str], original_answer: 
             response = client.chat.completions.create(
                 model="gpt-4o-2024-08-06",
                 messages=[
-                    {"role": "system", "content": "You are an expert in evaluating answer precision."},
-                    {"role": "user", "content": f"""Given the context, evaluate how close the new answer is to the original answer. Provide a precision score from 0 to 1, where 1 means the answers are identical in meaning and 0 means they are completely unrelated.
-
-Context: {context}
+                    {"role": "system", "content": "You are an expert in evaluating answer precision, focusing on semantic similarity rather than exact wording. Your task is to determine if two answers convey the same core information, even if they are phrased differently."},
+                    {"role": "user", "content": f"""Context: {context}
 Original Answer: {original_answer}
-New Answer: {generated_answer}
+Generated Answer: {generated_answer}
+
+Evaluate the semantic similarity between the original answer and the generated answer. Consider the following:
+1. Do both answers convey the same core information?
+2. Are there any key concepts present in one answer but missing in the other?
+3. Would both answers be considered correct in the context of the given information?
+
+Provide a precision score from 0 to 1, where:
+1.0: The answers are semantically identical or equivalent.
+0.8-0.9: The answers convey the same core information with minor differences.
+0.6-0.7: The answers are mostly similar but with some notable differences.
+0.4-0.5: The answers have some overlap but significant differences.
+0.2-0.3: The answers are mostly different but with some minor similarities.
+0.0-0.1: The answers are completely different or unrelated.
 
 Provide only the precision score as a number between 0 and 1."""}
                 ],
@@ -336,7 +341,7 @@ def use_sample(sample_index: int) -> Tuple[str, str, str]:
 def get_random_entry():
     random_index = random.randint(0, len(dataset['train']) - 1)
     entry = dataset['train'][random_index]
-    return entry['context'], entry['answer'], entry['question']
+    return entry['context'], entry['answers']['text'][0], entry['question']
 
 # Create Gradio interface
 with gr.Blocks(theme=gr.themes.Default()) as iface:
