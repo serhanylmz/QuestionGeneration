@@ -27,12 +27,12 @@ def generate_single_question(context: str, answer: str, initial_question: str, e
             messages=[
                 {
                     "role": "system",
-                    "content": "You are a helpful assistant that generates diverse questions based on given context, answer, and initial question."
+                    "content": "You are a helpful assistant that generates paraphrases of the given question."
                 },
                 {
                     "role": "user",
                     "content": (
-                        f"Based on this context: '{context}', answer: '{answer}', and initial question: '{initial_question}', "
+                        f"Based on this question: '{initial_question}', "
                         f"generate a new question that is semantically similar but structurally different from the initial question. "
                         f"The new question should still lead to the same answer when asked about the context. "
                         f"The question should also be distinct from these existing questions:\n{existing_questions_str}\n\n"
@@ -155,12 +155,12 @@ def compare_answers(answer1: str, answer2: str) -> bool:
             messages=[
                 {
                     "role": "system",
-                    "content": "You are an assistant that determines whether two answers are semantically the same."
+                    "content": "You are an assistant that determines whether two answers are coherent and contain the same information."
                 },
                 {
                     "role": "user",
                     "content": (
-                        f"Determine if the following two answers are semantically the same.\n\n"
+                        f"Determine if the following two answers are coherent and contain the same information. Examine both answers thoroughly. Two answers are considered the same if they convey the same information, even if they are phrased differently or use different wording.\n\n"
                         f"Answer 1: '{answer1}'\n\nAnswer 2: '{answer2}'\n\n"
                         "Respond with a JSON object in the following format without any additional text:\n"
                         "{\"are_same\": true} or {\"are_same\": false}"
@@ -308,7 +308,7 @@ def main(initial_question: str, n_paraphrases: int = 5, similarity_threshold: fl
 
 if __name__ == "__main__":
     initial_question = input("Enter the initial query: ")
-    n_paraphrases = int(input("Enter the number of paraphrases to generate (default 5): ") or "5")
-    similarity_threshold = float(input("Enter the semantic similarity threshold (default 0.9): ") or "0.9")
-    match_percentage_threshold = float(input("Enter the answer match percentage threshold (default 0.7): ") or "0.7")
+    n_paraphrases = int(input("Enter the number of paraphrases to generate (default 3): ") or "3")
+    similarity_threshold = float(input("Enter the semantic similarity threshold (default 0.7): ") or "0.7")
+    match_percentage_threshold = float(input("Enter the answer match percentage threshold (default 0.6): ") or "0.6")
     main(initial_question, n_paraphrases, similarity_threshold, match_percentage_threshold)
