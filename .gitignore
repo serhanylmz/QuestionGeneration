@@ -1,3 +1,7 @@
+# Code outputs
+*.txt
+*.png
+
 # Environment Variables
 .env
 
