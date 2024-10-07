@@ -1,11 +1,12 @@
 gradio
 openai
 numpy
+datasets
 sentence-transformers
 transformers
 python-dotenv
 pandas
 anthropic
 cohere
-google-generative-ai
+google-generativeai
 huggingface-hub
