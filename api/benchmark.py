@@ -8,6 +8,7 @@ from typing import List, Dict
 from dotenv import load_dotenv
 import asyncio
 from collections import Counter
+import typing_extensions as typing
 
 # Import the required functions from the pipeline file
 from pipeline_gradio_experimental import generate_basic_question, rank_questions_with_details, generate_answer
@@ -29,7 +30,7 @@ claude_client = anthropic.Anthropic(api_key=os.environ.get("CLAUDE_API_KEY"))
 
 # Initialize Cohere client
 import cohere
-cohere_client = cohere.ClientV2(api_key=os.environ.get("COHERE_API_KEY"))
+cohere_client = cohere.ClientV2(api_key=os.environ.get("COHERE_API_KEY"), log_warning_experimental_features=False)
 
 # Initialize Google Generative AI client for Gemini
 import google.generativeai as genai
@@ -106,7 +107,28 @@ def compare_questions_claude(context: str, original_question: str, original_answ
                              basic_question: str, basic_answer: str,
                              enhanced_question: str, enhanced_answer: str) -> Dict[str, any]:
     try:
-        prompt = f"""You are an expert in evaluating question-answer pairs based on a given context.
+        # Define the tool (function) with the expected output schema
+        tool = {
+            "name": "question_comparison_evaluator",
+            "description": "Evaluate and compare two generated question-answer pairs and output the result in structured JSON.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "basic_score": {"type": "number"},
+                    "enhanced_score": {"type": "number"},
+                    "explanation": {"type": "string"},
+                    "winner": {"type": "string", "enum": ["Basic", "Enhanced"]}
+                },
+                "required": ["basic_score", "enhanced_score", "explanation", "winner"],
+                "additionalProperties": False
+            }
+        }
+
+        # Build the messages
+        messages = [
+            {
+                "role": "user",
+                "content": f"""You are an expert in evaluating question-answer pairs based on a given context.
 
 Compare the following two generated question-answer pairs based on the given context and the original question-answer pair. Evaluate their quality and relevance.
 
@@ -126,27 +148,102 @@ Evaluate the basic and enhanced generated questions based on the following crite
 2. Semantic similarity to the original question
 3. How well the generated answer matches the original answer
 
-Score each generated question-answer pair on a scale of 0 to 10. Provide a detailed explanation for your evaluation, addressing each of the criteria mentioned above. Finally, determine which generation approach (Basic or Enhanced) is better overall and explain why.
+Score each generated question-answer pair on a scale of 0 to 10.
 
-Provide your answer in JSON format with the following keys: basic_score, enhanced_score, explanation, winner."""
+Finally, determine which generation approach (Basic or Enhanced) is better overall.
 
-        response = claude_client.completions.create(
-            model="claude-3.5-sonnet",
+Provide your answer using the 'question_comparison_evaluator' tool, and output the result in structured JSON format."""
+            }
+        ]
+
+        # Call the API with the structured output parameters
+        response = claude_client.messages.create(
+            model="claude-3-5-sonnet-20240620",
             max_tokens=1024,
-            messages=[{"role": "user", "content": prompt}]
+            tools=[tool],
+            tool_choice={"type": "tool", "name": "question_comparison_evaluator"},
+            messages=messages
         )
-        json_response = response.completion.strip()
-        # Ensure JSON parsing
-        parsed_response = json.loads(json_response)
-        return parsed_response
+
+        return response.content[0].input
+
     except Exception as e:
         logger.error(f"Error in comparing questions with Claude: {e}")
-        return {"basic_score": 0, "enhanced_score": 0, "explanation": "Failed to compare questions", "winner": "None"}
+        return {
+            "basic_score": 0,
+            "enhanced_score": 0,
+            "explanation": "Failed to compare questions",
+            "winner": "None"
+        }
+
 
 def compare_questions_cohere(context: str, original_question: str, original_answer: str,
                              basic_question: str, basic_answer: str,
                              enhanced_question: str, enhanced_answer: str) -> Dict[str, any]:
     try:
+        res = cohere_client.chat(
+            model="command-r-plus-08-2024",
+            messages=[
+                {
+                    "role": "user",
+                    "content": f"""You are an expert in evaluating question-answer pairs based on a given context.
+
+Compare the following two generated question-answer pairs based on the given context and the original question-answer pair. Evaluate their quality and relevance.
+
+Context: {context}
+
+Original Question: {original_question}
+Original Answer: {original_answer}
+
+Basic Generated Question: {basic_question}
+Basic Generated Answer: {basic_answer}
+
+Enhanced Generated Question: {enhanced_question}
+Enhanced Generated Answer: {enhanced_answer}
+
+Evaluate the basic and enhanced generated questions based on the following criteria:
+1. Structural difference from the original question
+2. Semantic similarity to the original question
+3. How well the generated answer matches the original answer
+
+Score each generated question-answer pair on a scale of 0 to 10. Provide a detailed explanation for your evaluation, addressing each of the criteria mentioned above. Finally, determine which generation approach (Basic or Enhanced) is better overall and explain why."""
+                }
+            ],
+            response_format={
+                "type": "json_object",
+                "schema": {
+                    "type": "object",
+                    "required": ["basic_score", "enhanced_score", "explanation", "winner"],
+                    "properties": {
+                        "basic_score": {"type": "number"},
+                        "enhanced_score": {"type": "number"},
+                        "explanation": {"type": "string"},
+                        "winner": {"type": "string", "enum": ["Basic", "Enhanced"]}
+                    },
+                },
+            },
+        )
+
+        json_response = res.message.content[0].text.strip()
+        parsed_response = json.loads(json_response)
+        return parsed_response
+
+    except Exception as e:
+        logger.error(f"Error in comparing questions with Cohere: {e}")
+        return {"basic_score": 0, "enhanced_score": 0, "explanation": "Failed to compare questions", "winner": "None"}
+
+
+def compare_questions_gemini(context: str, original_question: str, original_answer: str,
+                             basic_question: str, basic_answer: str,
+                             enhanced_question: str, enhanced_answer: str) -> Dict[str, any]:
+    try:
+
+        class ComparisonResult(typing.TypedDict):
+            basic_score: float
+            enhanced_score: float
+            explanation: str
+            winner: str
+
         prompt = f"""You are an expert in evaluating question-answer pairs based on a given context.
 
 Compare the following two generated question-answer pairs based on the given context and the original question-answer pair. Evaluate their quality and relevance.
@@ -169,65 +266,20 @@ Evaluate the basic and enhanced generated questions based on the following crite
 
 Score each generated question-answer pair on a scale of 0 to 10. Provide a detailed explanation for your evaluation, addressing each of the criteria mentioned above. Finally, determine which generation approach (Basic or Enhanced) is better overall and explain why."""
 
-        res = cohere_client.chat(
-            model="command-r-plus-08-2024",
-            messages=[{"role": "user", "content": prompt}],
-            response_format={
-                "type": "json_object",
-                "schema": {
-                    "type": "object",
-                    "required": ["basic_score", "enhanced_score", "explanation", "winner"],
-                    "properties": {
-                        "basic_score": {"type": "number"},
-                        "enhanced_score": {"type": "number"},
-                        "explanation": {"type": "string"},
-                        "winner": {"type": "string", "enum": ["Basic", "Enhanced"]}
-                    },
-                },
-            },
+        result = gemini_model.generate_content(
+            prompt,
+            generation_config=genai.GenerationConfig(
+                response_mime_type="application/json",
+                response_schema=ComparisonResult
+            ),
         )
-        json_response = res.message.content[0].text.strip()
-        parsed_response = json.loads(json_response)
-        return parsed_response
-    except Exception as e:
-        logger.error(f"Error in comparing questions with Cohere: {e}")
-        return {"basic_score": 0, "enhanced_score": 0, "explanation": "Failed to compare questions", "winner": "None"}
-
-def compare_questions_gemini(context: str, original_question: str, original_answer: str,
-                             basic_question: str, basic_answer: str,
-                             enhanced_question: str, enhanced_answer: str) -> Dict[str, any]:
-    try:
-        prompt = f"""You are an expert in evaluating question-answer pairs based on a given context.
-
-Compare the following two generated question-answer pairs based on the given context and the original question-answer pair. Evaluate their quality and relevance.
-
-Context: {context}
-
-Original Question: {original_question}
-Original Answer: {original_answer}
-
-Basic Generated Question: {basic_question}
-Basic Generated Answer: {basic_answer}
-
-Enhanced Generated Question: {enhanced_question}
-Enhanced Generated Answer: {enhanced_answer}
-
-Evaluate the basic and enhanced generated questions based on the following criteria:
-1. Structural difference from the original question
-2. Semantic similarity to the original question
-3. How well the generated answer matches the original answer
-
-Score each generated question-answer pair on a scale of 0 to 10. Provide a detailed explanation for your evaluation, addressing each of the criteria mentioned above. Finally, determine which generation approach (Basic or Enhanced) is better overall and explain why.
-
-Provide your answer in JSON format with the following keys: basic_score, enhanced_score, explanation, winner."""
-
-        response = gemini_model.generate_content(prompt)
-        json_response = response.text.strip()
+        json_response = result.text.strip()
         parsed_response = json.loads(json_response)
         return parsed_response
     except Exception as e:
         logger.error(f"Error in comparing questions with Gemini: {e}")
         return {"basic_score": 0, "enhanced_score": 0, "explanation": "Failed to compare questions", "winner": "None"}
+
 
 def compare_questions_llama(context: str, original_question: str, original_answer: str,
                             basic_question: str, basic_answer: str,
@@ -258,7 +310,7 @@ Score each generated question-answer pair on a scale of 0 to 10. Provide a detai
 Provide your answer in JSON format with the following keys: basic_score, enhanced_score, explanation, winner."""
 
         messages = [{"role": "user", "content": prompt}]
-        output = hf_client.chat_completions.create(
+        output = hf_client.chat.completions.create(
             model="meta-llama/Llama-3.1-70B-Instruct",
             messages=messages,
             temperature=0.5,
@@ -305,7 +357,7 @@ Score each generated question-answer pair on a scale of 0 to 10. Provide a detai
 Provide your answer in JSON format with the following keys: basic_score, enhanced_score, explanation, winner."""
 
         messages = [{"role": "user", "content": prompt}]
-        output = hf_client.chat_completions.create(
+        output = hf_client.chat.completions.create(
             model="Qwen/Qwen2.5-72B-Instruct",
             messages=messages,
             temperature=0.5,
