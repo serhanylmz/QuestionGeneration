@@ -25,22 +25,21 @@ gpt_client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
 # Initialize Anthropics client for Claude
 import anthropic
-claude_client = anthropic.Anthropic(api_key=os.environ.get("CLAUDE_API"))
+claude_client = anthropic.Anthropic(api_key=os.environ.get("CLAUDE_API_KEY"))
 
 # Initialize Cohere client
 import cohere
-cohere_client = cohere.ClientV2(api_key=os.environ.get("COHERE_API"))
+cohere_client = cohere.ClientV2(api_key=os.environ.get("COHERE_API_KEY"))
 
 # Initialize Google Generative AI client for Gemini
 import google.generativeai as genai
-genai.configure(api_key=os.environ.get("GEMINI_API"))
+genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
 gemini_model = genai.GenerativeModel("gemini-1.5-pro-002")
 
 # Initialize Hugging Face Inference Client for LLaMA and Qwen
 from huggingface_hub import InferenceClient
 hf_api_key = os.environ.get("HF_API_KEY")
-llama_client = InferenceClient(api_key=hf_api_key)
-qwen_client = InferenceClient(api_key=hf_api_key)
+hf_client = InferenceClient(api_key=hf_api_key)
 
 # Load the SQuAD dataset
 dataset = load_dataset("rajpurkar/squad")
@@ -259,7 +258,7 @@ Score each generated question-answer pair on a scale of 0 to 10. Provide a detai
 Provide your answer in JSON format with the following keys: basic_score, enhanced_score, explanation, winner."""
 
         messages = [{"role": "user", "content": prompt}]
-        output = llama_client.chat_completions.create(
+        output = hf_client.chat_completions.create(
             model="meta-llama/Llama-3.1-70B-Instruct",
             messages=messages,
             temperature=0.5,
@@ -306,7 +305,7 @@ Score each generated question-answer pair on a scale of 0 to 10. Provide a detai
 Provide your answer in JSON format with the following keys: basic_score, enhanced_score, explanation, winner."""
 
         messages = [{"role": "user", "content": prompt}]
-        output = qwen_client.chat_completions.create(
+        output = hf_client.chat_completions.create(
             model="Qwen/Qwen2.5-72B-Instruct",
             messages=messages,
             temperature=0.5,
