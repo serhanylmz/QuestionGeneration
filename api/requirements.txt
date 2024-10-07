@@ -1,7 +1,11 @@
 gradio
-cohere
+openai
 numpy
 sentence-transformers
 transformers
 python-dotenv
 pandas
+anthropic
+cohere
+google-generative-ai
+huggingface-hub
