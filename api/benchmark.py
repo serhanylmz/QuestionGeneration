@@ -45,11 +45,13 @@ hf_client = InferenceClient(api_key=hf_api_key)
 # Load the SQuAD dataset
 dataset = load_dataset("rajpurkar/squad")
 
-def get_entries(num_entries):
+def get_entries(start_index, num_entries):
     if num_entries == 'all':
-        return dataset['train']
+        return dataset['train'].select(range(start_index, len(dataset['train'])))
     else:
-        return dataset['train'].select(range(int(num_entries)))
+        end_index = start_index + int(num_entries)
+        return dataset['train'].select(range(start_index, end_index))
+
 
 def compare_questions_gpt4o(context: str, original_question: str, original_answer: str,
                             basic_question: str, basic_answer: str,
@@ -357,17 +359,70 @@ Ensure that your response can be parsed as valid JSON.
 
 
 def process_entry(entry):
-    context = entry['context']
-    answer = entry['answers']['text'][0]
-    initial_question = entry['question']
+    result = {}  # Initialize the result dict
 
-    # Generate basic and enhanced questions
-    basic_question = generate_basic_question(context, answer, initial_question)
-    detailed_scores, rankings, enhanced_question = rank_questions_with_details(context, answer, initial_question)
+    # Extract data from entry
+    try:
+        context = entry['context']
+        answer = entry['answers']['text'][0]
+        initial_question = entry['question']
+    except Exception as e:
+        logger.error(f"Error extracting data from entry: {e}")
+        result.update({
+            'Error': 'Failed to extract data from entry',
+            'Context': None,
+            'Original Question': None,
+            'Original Answer': None,
+            'Basic Question': None,
+            'Basic Answer': None,
+            'Enhanced Question': None,
+            'Enhanced Answer': None,
+            'GPT-4o Verdict': None,
+            'Claude Verdict': None,
+            'Cohere Verdict': None,
+            'Gemini Verdict': None,
+            'Qwen Verdict': None,
+            'Final Verdict': None
+        })
+        return result
 
-    # Generate answers
-    basic_answer = generate_answer(context, basic_question)
-    enhanced_answer = generate_answer(context, enhanced_question)
+    result.update({
+        'Context': context,
+        'Original Question': initial_question,
+        'Original Answer': answer
+    })
+
+    # Generate basic question
+    try:
+        basic_question = generate_basic_question(context, answer, initial_question)
+    except Exception as e:
+        logger.error(f"Error generating basic question: {e}")
+        basic_question = 'Error generating basic question'
+    result['Basic Question'] = basic_question
+
+    # Generate enhanced question
+    try:
+        detailed_scores, rankings, enhanced_question = rank_questions_with_details(context, answer, initial_question)
+    except Exception as e:
+        logger.error(f"Error generating enhanced question: {e}")
+        enhanced_question = 'Error generating enhanced question'
+    result['Enhanced Question'] = enhanced_question
+
+    # Generate basic answer
+    try:
+        basic_answer = generate_answer(context, basic_question)
+    except Exception as e:
+        logger.error(f"Error generating basic answer: {e}")
+        basic_answer = 'Error generating basic answer'
+    result['Basic Answer'] = basic_answer
+
+    # Generate enhanced answer
+    try:
+        enhanced_answer = generate_answer(context, enhanced_question)
+    except Exception as e:
+        logger.error(f"Error generating enhanced answer: {e}")
+        enhanced_answer = 'Error generating enhanced answer'
+    result['Enhanced Answer'] = enhanced_answer
 
     # Initialize vote counts
     vote_counts = {"Basic": 0, "Enhanced": 0}
@@ -376,69 +431,142 @@ def process_entry(entry):
     comparison_results = {}
 
     # GPT-4o
-    result_gpt4o = compare_questions_gpt4o(context, initial_question, answer, basic_question, basic_answer, enhanced_question, enhanced_answer)
-    comparison_results['GPT-4o'] = result_gpt4o
+    try:
+        result_gpt4o = compare_questions_gpt4o(
+            context, initial_question, answer,
+            basic_question, basic_answer,
+            enhanced_question, enhanced_answer
+        )
+    except Exception as e:
+        logger.error(f"Error in GPT-4o comparison: {e}")
+        result_gpt4o = {
+            'winner': 'Error',
+            'basic_score': 0,
+            'enhanced_score': 0,
+            'explanation': 'Error in GPT-4o comparison'
+        }
+    result['GPT-4o Verdict'] = result_gpt4o.get('winner', 'Error')
     if result_gpt4o['winner'] in vote_counts:
         vote_counts[result_gpt4o['winner']] += 1
 
     # Claude
-    result_claude = compare_questions_claude(context, initial_question, answer, basic_question, basic_answer, enhanced_question, enhanced_answer)
-    comparison_results['Claude'] = result_claude
+    try:
+        result_claude = compare_questions_claude(
+            context, initial_question, answer,
+            basic_question, basic_answer,
+            enhanced_question, enhanced_answer
+        )
+    except Exception as e:
+        logger.error(f"Error in Claude comparison: {e}")
+        result_claude = {
+            'winner': 'Error',
+            'basic_score': 0,
+            'enhanced_score': 0,
+            'explanation': 'Error in Claude comparison'
+        }
+    result['Claude Verdict'] = result_claude.get('winner', 'Error')
     if result_claude['winner'] in vote_counts:
         vote_counts[result_claude['winner']] += 1
 
     # Cohere
-    result_cohere = compare_questions_cohere(context, initial_question, answer, basic_question, basic_answer, enhanced_question, enhanced_answer)
-    comparison_results['Cohere'] = result_cohere
+    try:
+        result_cohere = compare_questions_cohere(
+            context, initial_question, answer,
+            basic_question, basic_answer,
+            enhanced_question, enhanced_answer
+        )
+    except Exception as e:
+        logger.error(f"Error in Cohere comparison: {e}")
+        result_cohere = {
+            'winner': 'Error',
+            'basic_score': 0,
+            'enhanced_score': 0,
+            'explanation': 'Error in Cohere comparison'
+        }
+    result['Cohere Verdict'] = result_cohere.get('winner', 'Error')
     if result_cohere['winner'] in vote_counts:
         vote_counts[result_cohere['winner']] += 1
 
     # Gemini
-    result_gemini = compare_questions_gemini(context, initial_question, answer, basic_question, basic_answer, enhanced_question, enhanced_answer)
-    comparison_results['Gemini'] = result_gemini
+    try:
+        result_gemini = compare_questions_gemini(
+            context, initial_question, answer,
+            basic_question, basic_answer,
+            enhanced_question, enhanced_answer
+        )
+    except Exception as e:
+        logger.error(f"Error in Gemini comparison: {e}")
+        result_gemini = {
+            'winner': 'Error',
+            'basic_score': 0,
+            'enhanced_score': 0,
+            'explanation': 'Error in Gemini comparison'
+        }
+    result['Gemini Verdict'] = result_gemini.get('winner', 'Error')
     if result_gemini['winner'] in vote_counts:
         vote_counts[result_gemini['winner']] += 1
 
     # Qwen
-    result_qwen = compare_questions_qwen(context, initial_question, answer, basic_question, basic_answer, enhanced_question, enhanced_answer)
-    comparison_results['Qwen'] = result_qwen
+    try:
+        result_qwen = compare_questions_qwen(
+            context, initial_question, answer,
+            basic_question, basic_answer,
+            enhanced_question, enhanced_answer
+        )
+    except Exception as e:
+        logger.error(f"Error in Qwen comparison: {e}")
+        result_qwen = {
+            'winner': 'Error',
+            'basic_score': 0,
+            'enhanced_score': 0,
+            'explanation': 'Error in Qwen comparison'
+        }
+    result['Qwen Verdict'] = result_qwen.get('winner', 'Error')
     if result_qwen['winner'] in vote_counts:
         vote_counts[result_qwen['winner']] += 1
 
     # Determine final verdict
-    final_verdict = max(vote_counts, key=vote_counts.get)
-    if vote_counts['Basic'] == vote_counts['Enhanced']:
-        final_verdict = 'Draw'
+    try:
+        final_verdict = max(vote_counts, key=vote_counts.get)
+        if vote_counts['Basic'] == vote_counts['Enhanced']:
+            final_verdict = 'Draw'
+    except Exception as e:
+        logger.error(f"Error determining final verdict: {e}")
+        final_verdict = 'Error'
+    result['Final Verdict'] = final_verdict
 
-    return {
-        'Context': context,
-        'Original Question': initial_question,
-        'Original Answer': answer,
-        'Basic Question': basic_question,
-        'Basic Answer': basic_answer,
-        'Enhanced Question': enhanced_question,
-        'Enhanced Answer': enhanced_answer,
-        'GPT-4o Verdict': result_gpt4o['winner'],
-        'Claude Verdict': result_claude['winner'],
-        'Cohere Verdict': result_cohere['winner'],
-        'Gemini Verdict': result_gemini['winner'],
-        'Qwen Verdict': result_qwen['winner'],
-        'Final Verdict': final_verdict
-    }
+    return result
+
 
 def main():
-    num_entries = input("Enter the number of entries to test on (or 'all' to process the full dataset): ")
-    entries = get_entries(num_entries)
+    num_entries = input("Enter the number of entries to test on (or 'all' to process to the end of the dataset): ")
+    start_index = int(input("Enter the starting index: "))
+
+    entries = get_entries(start_index, num_entries)
     results = []
     total_vote_counts = Counter()
 
-    for i, entry in enumerate(entries):
-        print(f"Processing entry {i+1}/{len(entries)}...")
-        result = process_entry(entry)
-        results.append(result)
-        # Update total vote counts
-        for key in ['Basic', 'Enhanced']:
-            total_vote_counts[key] += sum(1 for verdict in [result['GPT-4o Verdict'], result['Claude Verdict'], result['Cohere Verdict'], result['Gemini Verdict'], result['Qwen Verdict']] if verdict == key)
+    for idx_in_entries, entry in enumerate(entries):
+        idx_in_dataset = start_index + idx_in_entries
+        print(f"Processing entry {idx_in_dataset+1}/{len(dataset['train'])} (Entry {idx_in_entries+1}/{len(entries)})...")
+        try:
+            result = process_entry(entry)
+            results.append(result)
+            # Update total vote counts
+            for key in ['Basic', 'Enhanced']:
+                total_votes = sum(
+                    1 for verdict in [
+                        result.get('GPT-4o Verdict'),
+                        result.get('Claude Verdict'),
+                        result.get('Cohere Verdict'),
+                        result.get('Gemini Verdict'),
+                        result.get('Qwen Verdict')
+                    ] if verdict == key
+                )
+                total_vote_counts[key] += total_votes
+        except Exception as e:
+            logger.error(f"Error processing entry {idx_in_dataset}: {e}")
+            continue
 
     # Create DataFrame
     df = pd.DataFrame(results)
@@ -451,9 +579,9 @@ def main():
     # Generate summary
     total_entries = len(results)
     final_verdicts = df['Final Verdict'].value_counts()
-    percentage_basic = (final_verdicts.get('Basic', 0) / total_entries) * 100
-    percentage_enhanced = (final_verdicts.get('Enhanced', 0) / total_entries) * 100
-    percentage_draw = (final_verdicts.get('Draw', 0) / total_entries) * 100
+    percentage_basic = (final_verdicts.get('Basic', 0) / total_entries) * 100 if total_entries > 0 else 0
+    percentage_enhanced = (final_verdicts.get('Enhanced', 0) / total_entries) * 100 if total_entries > 0 else 0
+    percentage_draw = (final_verdicts.get('Draw', 0) / total_entries) * 100 if total_entries > 0 else 0
 
     summary = f"""
 Total Entries Processed: {total_entries}
@@ -474,6 +602,7 @@ Draws: {final_verdicts.get('Draw', 0)} ({percentage_draw:.2f}%)
         f.write(summary)
     print(f"Summary saved to {summary_filename}")
     print(summary)
+
 
 if __name__ == "__main__":
     main()
