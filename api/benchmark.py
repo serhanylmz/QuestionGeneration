@@ -206,7 +206,16 @@ Evaluate the basic and enhanced generated questions based on the following crite
 2. Semantic similarity to the original question
 3. How well the generated answer matches the original answer
 
-Score each generated question-answer pair on a scale of 0 to 10. Provide a detailed explanation for your evaluation, addressing each of the criteria mentioned above. Finally, determine which generation approach (Basic or Enhanced) is better overall and explain why."""
+Score each generated question-answer pair on a scale of 0 to 10. Provide a detailed explanation for your evaluation, addressing each of the criteria mentioned above. Finally, determine which generation approach (Basic or Enhanced) is better overall and explain why.
+Provide your answer in JSON format with the following structure:
+
+"basic_score": <integer>,
+"enhanced_score": <integer>,
+"explanation": <string>,
+"winner": <string>
+
+Ensure that your response can be parsed as valid JSON.
+"""
                 }
             ],
             response_format={
@@ -275,57 +284,10 @@ Score each generated question-answer pair on a scale of 0 to 10. Provide a detai
         )
         json_response = result.text.strip()
         parsed_response = json.loads(json_response)
+        parsed_response["winner"] = parsed_response["winner"].capitalize()
         return parsed_response
     except Exception as e:
         logger.error(f"Error in comparing questions with Gemini: {e}")
-        return {"basic_score": 0, "enhanced_score": 0, "explanation": "Failed to compare questions", "winner": "None"}
-
-
-def compare_questions_llama(context: str, original_question: str, original_answer: str,
-                            basic_question: str, basic_answer: str,
-                            enhanced_question: str, enhanced_answer: str) -> Dict[str, any]:
-    try:
-        prompt = f"""You are an expert in evaluating question-answer pairs based on a given context.
-
-Compare the following two generated question-answer pairs based on the given context and the original question-answer pair. Evaluate their quality and relevance.
-
-Context: {context}
-
-Original Question: {original_question}
-Original Answer: {original_answer}
-
-Basic Generated Question: {basic_question}
-Basic Generated Answer: {basic_answer}
-
-Enhanced Generated Question: {enhanced_question}
-Enhanced Generated Answer: {enhanced_answer}
-
-Evaluate the basic and enhanced generated questions based on the following criteria:
-1. Structural difference from the original question
-2. Semantic similarity to the original question
-3. How well the generated answer matches the original answer
-
-Score each generated question-answer pair on a scale of 0 to 10. Provide a detailed explanation for your evaluation, addressing each of the criteria mentioned above. Finally, determine which generation approach (Basic or Enhanced) is better overall and explain why.
-
-Provide your answer in JSON format with the following keys: basic_score, enhanced_score, explanation, winner."""
-
-        messages = [{"role": "user", "content": prompt}]
-        output = hf_client.chat.completions.create(
-            model="meta-llama/Llama-3.1-70B-Instruct",
-            messages=messages,
-            temperature=0.5,
-            max_tokens=1024,
-            top_p=0.7
-        )
-        response_text = ""
-        for chunk in output:
-            response_text += chunk.choices[0].delta.content
-
-        json_response = response_text.strip()
-        parsed_response = json.loads(json_response)
-        return parsed_response
-    except Exception as e:
-        logger.error(f"Error in comparing questions with LLaMA: {e}")
         return {"basic_score": 0, "enhanced_score": 0, "explanation": "Failed to compare questions", "winner": "None"}
 
 def compare_questions_qwen(context: str, original_question: str, original_answer: str,
@@ -354,7 +316,15 @@ Evaluate the basic and enhanced generated questions based on the following crite
 
 Score each generated question-answer pair on a scale of 0 to 10. Provide a detailed explanation for your evaluation, addressing each of the criteria mentioned above. Finally, determine which generation approach (Basic or Enhanced) is better overall and explain why.
 
-Provide your answer in JSON format with the following keys: basic_score, enhanced_score, explanation, winner."""
+Provide your answer in JSON format with the following structure:
+
+"basic_score": <integer>,
+"enhanced_score": <integer>,
+"explanation": <string>,
+"winner": <string>
+
+Ensure that your response can be parsed as valid JSON.
+"""
 
         messages = [{"role": "user", "content": prompt}]
         output = hf_client.chat.completions.create(
@@ -364,16 +334,27 @@ Provide your answer in JSON format with the following keys: basic_score, enhance
             max_tokens=1024,
             top_p=0.7
         )
-        response_text = ""
-        for chunk in output:
-            response_text += chunk.choices[0].delta.content
+        response_text = output.choices[0].message.content
+        # print("Raw response:", repr(response_text))
 
-        json_response = response_text.strip()
+        # Function to extract JSON content
+        import re
+        def extract_json_content(text):
+            pattern = r"\{.*\}"
+            matches = re.findall(pattern, text, re.DOTALL)
+            if matches:
+                return matches[0]
+            else:
+                return text.strip()
+
+        json_response = extract_json_content(response_text)
+        # print("Extracted JSON:", json_response)
         parsed_response = json.loads(json_response)
         return parsed_response
     except Exception as e:
         logger.error(f"Error in comparing questions with Qwen: {e}")
         return {"basic_score": 0, "enhanced_score": 0, "explanation": "Failed to compare questions", "winner": "None"}
+
 
 def process_entry(entry):
     context = entry['context']
@@ -418,12 +399,6 @@ def process_entry(entry):
     if result_gemini['winner'] in vote_counts:
         vote_counts[result_gemini['winner']] += 1
 
-    # LLaMA
-    result_llama = compare_questions_llama(context, initial_question, answer, basic_question, basic_answer, enhanced_question, enhanced_answer)
-    comparison_results['LLaMA'] = result_llama
-    if result_llama['winner'] in vote_counts:
-        vote_counts[result_llama['winner']] += 1
-
     # Qwen
     result_qwen = compare_questions_qwen(context, initial_question, answer, basic_question, basic_answer, enhanced_question, enhanced_answer)
     comparison_results['Qwen'] = result_qwen
@@ -447,7 +422,6 @@ def process_entry(entry):
         'Claude Verdict': result_claude['winner'],
         'Cohere Verdict': result_cohere['winner'],
         'Gemini Verdict': result_gemini['winner'],
-        'LLaMA Verdict': result_llama['winner'],
         'Qwen Verdict': result_qwen['winner'],
         'Final Verdict': final_verdict
     }
@@ -464,7 +438,7 @@ def main():
         results.append(result)
         # Update total vote counts
         for key in ['Basic', 'Enhanced']:
-            total_vote_counts[key] += sum(1 for verdict in [result['GPT-4o Verdict'], result['Claude Verdict'], result['Cohere Verdict'], result['Gemini Verdict'], result['LLaMA Verdict'], result['Qwen Verdict']] if verdict == key)
+            total_vote_counts[key] += sum(1 for verdict in [result['GPT-4o Verdict'], result['Claude Verdict'], result['Cohere Verdict'], result['Gemini Verdict'], result['Qwen Verdict']] if verdict == key)
 
     # Create DataFrame
     df = pd.DataFrame(results)
