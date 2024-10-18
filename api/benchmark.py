@@ -45,13 +45,15 @@ hf_client = InferenceClient(api_key=hf_api_key)
 # Load the SQuAD dataset
 dataset = load_dataset("rajpurkar/squad")
 
-def get_entries(start_index, num_entries):
+def get_random_entries(num_entries, random_seed):
+    dataset_size = len(dataset['train'])
     if num_entries == 'all':
-        return dataset['train'].select(range(start_index, len(dataset['train'])))
+        return dataset['train']
     else:
-        end_index = start_index + int(num_entries)
-        return dataset['train'].select(range(start_index, end_index))
-
+        num_entries = int(num_entries)
+        random.seed(random_seed)
+        indices = random.sample(range(dataset_size), num_entries)
+        return dataset['train'].select(indices)
 
 def compare_questions_gpt4o(context: str, original_question: str, original_answer: str,
                             basic_question: str, basic_answer: str,
@@ -68,18 +70,18 @@ Context: {context}
 Original Question: {original_question}
 Original Answer: {original_answer}
 
-Basic Generated Question: {basic_question}
-Basic Generated Answer: {basic_answer}
+Question 1: {enhanced_question}
+Answer 1: {enhanced_answer}
 
-Enhanced Generated Question: {enhanced_question}
-Enhanced Generated Answer: {enhanced_answer}
+Question 2: {basic_question}
+Answer 2: {basic_answer}
 
-Evaluate the basic and enhanced generated questions based on the following criteria:
+Evaluate Question 1 and Question 2 based on the following criteria:
 1. Structural difference from the original question
 2. Semantic similarity to the original question
 3. How well the generated answer matches the original answer
 
-Score each generated question-answer pair on a scale of 0 to 10. Provide a detailed explanation for your evaluation, addressing each of the criteria mentioned above. Finally, determine which generation approach (Basic or Enhanced) is better overall and explain why."""}
+Score each question-answer pair on a scale of 0 to 10. Provide a detailed explanation for your evaluation, addressing each of the criteria mentioned above. Finally, determine which question (Question 1 or Question 2) is better overall and explain why."""}
             ],
             response_format={
                 "type": "json_schema",
@@ -89,12 +91,12 @@ Score each generated question-answer pair on a scale of 0 to 10. Provide a detai
                     "schema": {
                         "type": "object",
                         "properties": {
-                            "basic_score": {"type": "number"},
-                            "enhanced_score": {"type": "number"},
+                            "question1_score": {"type": "number"},
+                            "question2_score": {"type": "number"},
                             "explanation": {"type": "string"},
-                            "winner": {"type": "string", "enum": ["Basic", "Enhanced"]}
+                            "winner": {"type": "string", "enum": ["Question 1", "Question 2"]}
                         },
-                        "required": ["basic_score", "enhanced_score", "explanation", "winner"],
+                        "required": ["question1_score", "question2_score", "explanation", "winner"],
                         "additionalProperties": False
                     }
                 }
@@ -103,7 +105,7 @@ Score each generated question-answer pair on a scale of 0 to 10. Provide a detai
         return json.loads(response.choices[0].message.content)
     except Exception as e:
         logger.error(f"Error in comparing questions with GPT-4o: {e}")
-        return {"basic_score": 0, "enhanced_score": 0, "explanation": "Failed to compare questions", "winner": "None"}
+        return {"question1_score": 0, "question2_score": 0, "explanation": "Failed to compare questions", "winner": "None"}
 
 def compare_questions_claude(context: str, original_question: str, original_answer: str,
                              basic_question: str, basic_answer: str,
@@ -116,12 +118,12 @@ def compare_questions_claude(context: str, original_question: str, original_answ
             "input_schema": {
                 "type": "object",
                 "properties": {
-                    "basic_score": {"type": "number"},
-                    "enhanced_score": {"type": "number"},
+                    "question1_score": {"type": "number"},
+                    "question2_score": {"type": "number"},
                     "explanation": {"type": "string"},
-                    "winner": {"type": "string", "enum": ["Basic", "Enhanced"]}
+                    "winner": {"type": "string", "enum": ["Question 1", "Question 2"]}
                 },
-                "required": ["basic_score", "enhanced_score", "explanation", "winner"],
+                "required": ["question1_score", "question2_score", "explanation", "winner"],
                 "additionalProperties": False
             }
         }
@@ -139,20 +141,20 @@ Context: {context}
 Original Question: {original_question}
 Original Answer: {original_answer}
 
-Basic Generated Question: {basic_question}
-Basic Generated Answer: {basic_answer}
+Question 1: {enhanced_question}
+Answer 1: {enhanced_answer}
 
-Enhanced Generated Question: {enhanced_question}
-Enhanced Generated Answer: {enhanced_answer}
+Question 2: {basic_question}
+Answer 2: {basic_answer}
 
-Evaluate the basic and enhanced generated questions based on the following criteria:
+Evaluate Question 1 and Question 2 based on the following criteria:
 1. Structural difference from the original question
 2. Semantic similarity to the original question
 3. How well the generated answer matches the original answer
 
-Score each generated question-answer pair on a scale of 0 to 10.
+Score each question-answer pair on a scale of 0 to 10.
 
-Finally, determine which generation approach (Basic or Enhanced) is better overall.
+Finally, determine which question (Question 1 or Question 2) is better overall.
 
 Provide your answer using the 'question_comparison_evaluator' tool, and output the result in structured JSON format."""
             }
@@ -172,8 +174,8 @@ Provide your answer using the 'question_comparison_evaluator' tool, and output t
     except Exception as e:
         logger.error(f"Error in comparing questions with Claude: {e}")
         return {
-            "basic_score": 0,
-            "enhanced_score": 0,
+            "question1_score": 0,
+            "question2_score": 0,
             "explanation": "Failed to compare questions",
             "winner": "None"
         }
@@ -197,22 +199,22 @@ Context: {context}
 Original Question: {original_question}
 Original Answer: {original_answer}
 
-Basic Generated Question: {basic_question}
-Basic Generated Answer: {basic_answer}
+Question 1: {enhanced_question}
+Answer 1: {enhanced_answer}
 
-Enhanced Generated Question: {enhanced_question}
-Enhanced Generated Answer: {enhanced_answer}
+Question 2: {basic_question}
+Answer 2: {basic_answer}
 
-Evaluate the basic and enhanced generated questions based on the following criteria:
+Evaluate Question 1 and Question 2 based on the following criteria:
 1. Structural difference from the original question
 2. Semantic similarity to the original question
 3. How well the generated answer matches the original answer
 
-Score each generated question-answer pair on a scale of 0 to 10. Provide a detailed explanation for your evaluation, addressing each of the criteria mentioned above. Finally, determine which generation approach (Basic or Enhanced) is better overall and explain why.
+Score each question-answer pair on a scale of 0 to 10. Provide a detailed explanation for your evaluation, addressing each of the criteria mentioned above. Finally, determine which question (Question 1 or Question 2) is better overall and explain why.
 Provide your answer in JSON format with the following structure:
 
-"basic_score": <integer>,
-"enhanced_score": <integer>,
+"question1_score": <integer>,
+"question2_score": <integer>,
 "explanation": <string>,
 "winner": <string>
 
@@ -224,12 +226,12 @@ Ensure that your response can be parsed as valid JSON.
                 "type": "json_object",
                 "schema": {
                     "type": "object",
-                    "required": ["basic_score", "enhanced_score", "explanation", "winner"],
+                    "required": ["question1_score", "question2_score", "explanation", "winner"],
                     "properties": {
-                        "basic_score": {"type": "number"},
-                        "enhanced_score": {"type": "number"},
+                        "question1_score": {"type": "number"},
+                        "question2_score": {"type": "number"},
                         "explanation": {"type": "string"},
-                        "winner": {"type": "string", "enum": ["Basic", "Enhanced"]}
+                        "winner": {"type": "string", "enum": ["Question 1", "Question 2"]}
                     },
                 },
             },
@@ -241,7 +243,7 @@ Ensure that your response can be parsed as valid JSON.
 
     except Exception as e:
         logger.error(f"Error in comparing questions with Cohere: {e}")
-        return {"basic_score": 0, "enhanced_score": 0, "explanation": "Failed to compare questions", "winner": "None"}
+        return {"question1_score": 0, "question2_score": 0, "explanation": "Failed to compare questions", "winner": "None"}
 
 
 def compare_questions_gemini(context: str, original_question: str, original_answer: str,
@@ -250,8 +252,8 @@ def compare_questions_gemini(context: str, original_question: str, original_answ
     try:
 
         class ComparisonResult(typing.TypedDict):
-            basic_score: float
-            enhanced_score: float
+            question1_score: float
+            question2_score: float
             explanation: str
             winner: str
 
@@ -264,18 +266,18 @@ Context: {context}
 Original Question: {original_question}
 Original Answer: {original_answer}
 
-Basic Generated Question: {basic_question}
-Basic Generated Answer: {basic_answer}
+Question 1: {enhanced_question}
+Answer 1: {enhanced_answer}
 
-Enhanced Generated Question: {enhanced_question}
-Enhanced Generated Answer: {enhanced_answer}
+Question 2: {basic_question}
+Answer 2: {basic_answer}
 
-Evaluate the basic and enhanced generated questions based on the following criteria:
+Evaluate Question 1 and Question 2 based on the following criteria:
 1. Structural difference from the original question
 2. Semantic similarity to the original question
 3. How well the generated answer matches the original answer
 
-Score each generated question-answer pair on a scale of 0 to 10. Provide a detailed explanation for your evaluation, addressing each of the criteria mentioned above. Finally, determine which generation approach (Basic or Enhanced) is better overall and explain why."""
+Score each question-answer pair on a scale of 0 to 10. Provide a detailed explanation for your evaluation, addressing each of the criteria mentioned above. Finally, determine which question (Question 1 or Question 2) is better overall and explain why."""
 
         result = gemini_model.generate_content(
             prompt,
@@ -290,7 +292,7 @@ Score each generated question-answer pair on a scale of 0 to 10. Provide a detai
         return parsed_response
     except Exception as e:
         logger.error(f"Error in comparing questions with Gemini: {e}")
-        return {"basic_score": 0, "enhanced_score": 0, "explanation": "Failed to compare questions", "winner": "None"}
+        return {"question1_score": 0, "question2_score": 0, "explanation": "Failed to compare questions", "winner": "None"}
 
 def compare_questions_qwen(context: str, original_question: str, original_answer: str,
                            basic_question: str, basic_answer: str,
@@ -305,23 +307,23 @@ Context: {context}
 Original Question: {original_question}
 Original Answer: {original_answer}
 
-Basic Generated Question: {basic_question}
-Basic Generated Answer: {basic_answer}
+Question 1: {enhanced_question}
+Answer 1: {enhanced_answer}
 
-Enhanced Generated Question: {enhanced_question}
-Enhanced Generated Answer: {enhanced_answer}
+Question 2: {basic_question}
+Answer 2: {basic_answer}
 
-Evaluate the basic and enhanced generated questions based on the following criteria:
+Evaluate Question 1 and Question 2 based on the following criteria:
 1. Structural difference from the original question
 2. Semantic similarity to the original question
 3. How well the generated answer matches the original answer
 
-Score each generated question-answer pair on a scale of 0 to 10. Provide a detailed explanation for your evaluation, addressing each of the criteria mentioned above. Finally, determine which generation approach (Basic or Enhanced) is better overall and explain why.
+Score each question-answer pair on a scale of 0 to 10. Provide a detailed explanation for your evaluation, addressing each of the criteria mentioned above. Finally, determine which question (Question 1 or Question 2) is better overall and explain why.
 
 Provide your answer in JSON format with the following structure:
 
-"basic_score": <integer>,
-"enhanced_score": <integer>,
+"question1_score": <integer>,
+"question2_score": <integer>,
 "explanation": <string>,
 "winner": <string>
 
@@ -355,7 +357,7 @@ Ensure that your response can be parsed as valid JSON.
         return parsed_response
     except Exception as e:
         logger.error(f"Error in comparing questions with Qwen: {e}")
-        return {"basic_score": 0, "enhanced_score": 0, "explanation": "Failed to compare questions", "winner": "None"}
+        return {"question1_score": 0, "question2_score": 0, "explanation": "Failed to compare questions", "winner": "None"}
 
 
 def process_entry(entry):
@@ -425,7 +427,7 @@ def process_entry(entry):
     result['Enhanced Answer'] = enhanced_answer
 
     # Initialize vote counts
-    vote_counts = {"Basic": 0, "Enhanced": 0}
+    vote_counts = {"Question 1": 0, "Question 2": 0}
 
     # Collect comparison results from each LLM judge
     comparison_results = {}
@@ -441,8 +443,8 @@ def process_entry(entry):
         logger.error(f"Error in GPT-4o comparison: {e}")
         result_gpt4o = {
             'winner': 'Error',
-            'basic_score': 0,
-            'enhanced_score': 0,
+            'question1_score': 0,
+            'question2_score': 0,
             'explanation': 'Error in GPT-4o comparison'
         }
     result['GPT-4o Verdict'] = result_gpt4o.get('winner', 'Error')
@@ -460,8 +462,8 @@ def process_entry(entry):
         logger.error(f"Error in Claude comparison: {e}")
         result_claude = {
             'winner': 'Error',
-            'basic_score': 0,
-            'enhanced_score': 0,
+            'question1_score': 0,
+            'question2_score': 0,
             'explanation': 'Error in Claude comparison'
         }
     result['Claude Verdict'] = result_claude.get('winner', 'Error')
@@ -479,8 +481,8 @@ def process_entry(entry):
         logger.error(f"Error in Cohere comparison: {e}")
         result_cohere = {
             'winner': 'Error',
-            'basic_score': 0,
-            'enhanced_score': 0,
+            'question1_score': 0,
+            'question2_score': 0,
             'explanation': 'Error in Cohere comparison'
         }
     result['Cohere Verdict'] = result_cohere.get('winner', 'Error')
@@ -498,8 +500,8 @@ def process_entry(entry):
         logger.error(f"Error in Gemini comparison: {e}")
         result_gemini = {
             'winner': 'Error',
-            'basic_score': 0,
-            'enhanced_score': 0,
+            'question1_score': 0,
+            'question2_score': 0,
             'explanation': 'Error in Gemini comparison'
         }
     result['Gemini Verdict'] = result_gemini.get('winner', 'Error')
@@ -517,8 +519,8 @@ def process_entry(entry):
         logger.error(f"Error in Qwen comparison: {e}")
         result_qwen = {
             'winner': 'Error',
-            'basic_score': 0,
-            'enhanced_score': 0,
+            'question1_score': 0,
+            'question2_score': 0,
             'explanation': 'Error in Qwen comparison'
         }
     result['Qwen Verdict'] = result_qwen.get('winner', 'Error')
@@ -527,9 +529,12 @@ def process_entry(entry):
 
     # Determine final verdict
     try:
-        final_verdict = max(vote_counts, key=vote_counts.get)
-        if vote_counts['Basic'] == vote_counts['Enhanced']:
+        final_verdict_key = max(vote_counts, key=vote_counts.get)
+        if vote_counts['Question 1'] == vote_counts['Question 2']:
             final_verdict = 'Draw'
+        else:
+            # Map 'Question 1' to 'Enhanced', 'Question 2' to 'Basic'
+            final_verdict = 'Enhanced' if final_verdict_key == 'Question 1' else 'Basic'
     except Exception as e:
         logger.error(f"Error determining final verdict: {e}")
         final_verdict = 'Error'
@@ -539,21 +544,21 @@ def process_entry(entry):
 
 
 def main():
-    num_entries = input("Enter the number of entries to test on (or 'all' to process to the end of the dataset): ")
-    start_index = int(input("Enter the starting index: "))
+    num_entries = input("Enter the number of entries to test on (or 'all' to process the entire dataset): ")
+    random_seed = int(input("Enter a random seed (integer): "))
 
-    entries = get_entries(start_index, num_entries)
+    entries = get_random_entries(num_entries, random_seed)
     results = []
     total_vote_counts = Counter()
 
     for idx_in_entries, entry in enumerate(entries):
-        idx_in_dataset = start_index + idx_in_entries
-        print(f"Processing entry {idx_in_dataset+1}/{len(dataset['train'])} (Entry {idx_in_entries+1}/{len(entries)})...")
+        idx_in_dataset = idx_in_entries  # Since entries are random, index in dataset is not sequential
+        print(f"Processing entry {idx_in_entries+1}/{len(entries)}...")
         try:
             result = process_entry(entry)
             results.append(result)
             # Update total vote counts
-            for key in ['Basic', 'Enhanced']:
+            for key in ['Question 1', 'Question 2']:
                 total_votes = sum(
                     1 for verdict in [
                         result.get('GPT-4o Verdict'),
@@ -587,12 +592,12 @@ def main():
 Total Entries Processed: {total_entries}
 
 Vote Counts:
-Basic Generation Votes: {total_vote_counts['Basic']}
-Enhanced Generation Votes: {total_vote_counts['Enhanced']}
+Question 1 (Enhanced) Votes: {total_vote_counts['Question 1']}
+Question 2 (Basic) Votes: {total_vote_counts['Question 2']}
 
 Final Verdicts:
-Basic Generation Wins: {final_verdicts.get('Basic', 0)} ({percentage_basic:.2f}%)
 Enhanced Generation Wins: {final_verdicts.get('Enhanced', 0)} ({percentage_enhanced:.2f}%)
+Basic Generation Wins: {final_verdicts.get('Basic', 0)} ({percentage_basic:.2f}%)
 Draws: {final_verdicts.get('Draw', 0)} ({percentage_draw:.2f}%)
 """
 
