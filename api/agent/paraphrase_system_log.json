@@ -1,0 +1,81 @@
+[
+  {
+    "timestamp": "2024-10-30T21:56:25.333090+00:00",
+    "event_type": "generator",
+    "data": {
+      "generator_prompt": "You are a helpful assistant that paraphrases text while maintaining the original meaning.",
+      "input_text": "In what year was the College of Engineering at Notre Dame formed?",
+      "paraphrased_text": "What year was the Notre Dame College of Engineering established?"
+    }
+  },
+  {
+    "timestamp": "2024-10-30T21:56:28.960393+00:00",
+    "event_type": "evaluator",
+    "data": {
+      "text_a": "In what year was the College of Engineering at Notre Dame formed?",
+      "text_b": "What year was the Notre Dame College of Engineering established?",
+      "criteria_weights": {
+        "fluency": 1.0,
+        "clarity": 1.0,
+        "semantic_preservation": 1.0,
+        "coherence": 1.0,
+        "grammar": 1.0
+      },
+      "better_text": "Text B",
+      "reasoning": "Both texts aim to ask when the Notre Dame College of Engineering was established. However, Text B is slightly more straightforward and clear. It places the most important information ('what year' and 'Notre Dame College of Engineering') in a direct manner. Text A, while clear, uses a slightly less direct phrase ('In what year was'), which feels more formal but less conversational. Additionally, Text B's phrasing ('was established') is clearer and more direct compared to Text A's phrasing ('was formed'). While both texts are grammatically correct and semantically similar, Text B has a slightly better flow and coherence in its construction, making it the better choice overall."
+    }
+  },
+  {
+    "timestamp": "2024-10-30T21:56:28.960393+00:00",
+    "event_type": "final_result",
+    "data": {
+      "paraphrased_text": "What year was the Notre Dame College of Engineering established?",
+      "evaluation_result": {
+        "better_text": "Text B",
+        "reasoning": "Both texts aim to ask when the Notre Dame College of Engineering was established. However, Text B is slightly more straightforward and clear. It places the most important information ('what year' and 'Notre Dame College of Engineering') in a direct manner. Text A, while clear, uses a slightly less direct phrase ('In what year was'), which feels more formal but less conversational. Additionally, Text B's phrasing ('was established') is clearer and more direct compared to Text A's phrasing ('was formed'). While both texts are grammatically correct and semantically similar, Text B has a slightly better flow and coherence in its construction, making it the better choice overall.",
+        "eval_history": [
+          {
+            "role": "user",
+            "content": "Compare the following two texts:\n\nText A:\nIn what year was the College of Engineering at Notre Dame formed?\n\nText B:\nWhat year was the Notre Dame College of Engineering established?\n\nCriteria weights:\n{\"fluency\": 1.0, \"clarity\": 1.0, \"semantic_preservation\": 1.0, \"coherence\": 1.0, \"grammar\": 1.0}\n\nProvide your evaluation and choose the better text. Always choose one as better and provide detailed reasoning."
+          },
+          {
+            "role": "assistant",
+            "content": "{\"better_text\":\"Text B\",\"reasoning\":\"Both texts aim to ask when the Notre Dame College of Engineering was established. However, Text B is slightly more straightforward and clear. It places the most important information ('what year' and 'Notre Dame College of Engineering') in a direct manner. Text A, while clear, uses a slightly less direct phrase ('In what year was'), which feels more formal but less conversational. Additionally, Text B's phrasing ('was established') is clearer and more direct compared to Text A's phrasing ('was formed'). While both texts are grammatically correct and semantically similar, Text B has a slightly better flow and coherence in its construction, making it the better choice overall.\"}"
+          }
+        ]
+      },
+      "attempt_history": [
+        {
+          "iteration": 1,
+          "timestamp": "2024-10-30T21:56:24.434052+00:00",
+          "generator_prompt": "You are a helpful assistant that paraphrases text while maintaining the original meaning.",
+          "paraphrased_text": "What year was the Notre Dame College of Engineering established?",
+          "evaluation_result": {
+            "better_text": "Text B",
+            "reasoning": "Both texts aim to ask when the Notre Dame College of Engineering was established. However, Text B is slightly more straightforward and clear. It places the most important information ('what year' and 'Notre Dame College of Engineering') in a direct manner. Text A, while clear, uses a slightly less direct phrase ('In what year was'), which feels more formal but less conversational. Additionally, Text B's phrasing ('was established') is clearer and more direct compared to Text A's phrasing ('was formed'). While both texts are grammatically correct and semantically similar, Text B has a slightly better flow and coherence in its construction, making it the better choice overall.",
+            "eval_history": [
+              {
+                "role": "user",
+                "content": "Compare the following two texts:\n\nText A:\nIn what year was the College of Engineering at Notre Dame formed?\n\nText B:\nWhat year was the Notre Dame College of Engineering established?\n\nCriteria weights:\n{\"fluency\": 1.0, \"clarity\": 1.0, \"semantic_preservation\": 1.0, \"coherence\": 1.0, \"grammar\": 1.0}\n\nProvide your evaluation and choose the better text. Always choose one as better and provide detailed reasoning."
+              },
+              {
+                "role": "assistant",
+                "content": "{\"better_text\":\"Text B\",\"reasoning\":\"Both texts aim to ask when the Notre Dame College of Engineering was established. However, Text B is slightly more straightforward and clear. It places the most important information ('what year' and 'Notre Dame College of Engineering') in a direct manner. Text A, while clear, uses a slightly less direct phrase ('In what year was'), which feels more formal but less conversational. Additionally, Text B's phrasing ('was established') is clearer and more direct compared to Text A's phrasing ('was formed'). While both texts are grammatically correct and semantically similar, Text B has a slightly better flow and coherence in its construction, making it the better choice overall.\"}"
+              }
+            ]
+          }
+        }
+      ],
+      "eval_conversation_history": [
+        {
+          "role": "user",
+          "content": "Compare the following two texts:\n\nText A:\nIn what year was the College of Engineering at Notre Dame formed?\n\nText B:\nWhat year was the Notre Dame College of Engineering established?\n\nCriteria weights:\n{\"fluency\": 1.0, \"clarity\": 1.0, \"semantic_preservation\": 1.0, \"coherence\": 1.0, \"grammar\": 1.0}\n\nProvide your evaluation and choose the better text. Always choose one as better and provide detailed reasoning."
+        },
+        {
+          "role": "assistant",
+          "content": "{\"better_text\":\"Text B\",\"reasoning\":\"Both texts aim to ask when the Notre Dame College of Engineering was established. However, Text B is slightly more straightforward and clear. It places the most important information ('what year' and 'Notre Dame College of Engineering') in a direct manner. Text A, while clear, uses a slightly less direct phrase ('In what year was'), which feels more formal but less conversational. Additionally, Text B's phrasing ('was established') is clearer and more direct compared to Text A's phrasing ('was formed'). While both texts are grammatically correct and semantically similar, Text B has a slightly better flow and coherence in its construction, making it the better choice overall.\"}"
+        }
+      ]
+    }
+  }
+]
