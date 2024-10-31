@@ -5,23 +5,14 @@ import json
 import pandas as pd
 from datasets import load_dataset
 import random
-from typing import Dict, Any
+from typing import List, Dict, Any
 from dotenv import load_dotenv
-import asyncio
-from collections import Counter
 import csv
 import argparse
 from tqdm import tqdm
 from tenacity import retry, wait_exponential, stop_after_attempt
-import time
-
-# Usage Instructions:
-
-# Initial Run:
-# python benchmark.py --num_entries 1000 --random_seed 42
-
-# Resuming After Interruption: If the script was interrupted at entry 384, you can resume from entry 384:
-# python benchmark.py --num_entries 1000 --random_seed 42 --start_index 384
+from collections import Counter
+from pydantic import BaseModel
 
 # Import the required functions from the pipeline file
 from pipeline import generate_basic_question, rank_questions_with_details, generate_answer
@@ -37,8 +28,8 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 # Initialize OpenAI client for GPT-4o
-import openai
-openai.api_key = os.environ.get("OPENAI_API_KEY")
+from openai import OpenAI
+gpt_client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
 # Initialize Anthropics client for Claude
 import anthropic
@@ -53,7 +44,7 @@ import google.generativeai as genai
 genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
 gemini_model = genai.GenerativeModel("gemini-1.5-pro-002")
 
-# Initialize Hugging Face Inference Client for Qwen
+# Initialize Hugging Face Inference Client for LLaMA and Qwen
 from huggingface_hub import InferenceClient
 hf_api_key = os.environ.get("HF_API_KEY")
 hf_client = InferenceClient(api_key=hf_api_key)
@@ -101,16 +92,18 @@ def safe_json_parse(response_text):
 
 def safe_api_call(func):
     @retry(wait=wait_exponential(min=1, max=10), stop=stop_after_attempt(3))
-    async def wrapper(*args, **kwargs):
-        return await func(*args, **kwargs)
+    def wrapper(*args, **kwargs):
+        return func(*args, **kwargs)
     return wrapper
 
+# Modify compare functions to include retries and keep API calls consistent with the initial code
+
 @safe_api_call
-async def compare_questions_gpt4o(context: str, original_question: str, original_answer: str,
-                                  basic_question: str, basic_answer: str,
-                                  enhanced_question: str, enhanced_answer: str) -> Dict[str, Any]:
+def compare_questions_gpt4o(context: str, original_question: str, original_answer: str,
+                            basic_question: str, basic_answer: str,
+                            enhanced_question: str, enhanced_answer: str) -> Dict[str, Any]:
     try:
-        response = await openai.ChatCompletion.acreate(
+        response = gpt_client.chat.completions.create(
             model="gpt-4o-2024-08-06",
             messages=[
                 {"role": "system", "content": "You are an expert in evaluating question-answer pairs based on a given context."},
@@ -153,19 +146,15 @@ Score each question-answer pair on a scale of 0 to 10. Provide a detailed explan
                 }
             }
         )
-        json_response = response['choices'][0]['message']['content']
-        parsed_response = safe_json_parse(json_response)
-        if parsed_response is None:
-            raise ValueError("Failed to parse JSON response")
-        return parsed_response
+        return json.loads(response.choices[0].message.content)
     except Exception as e:
-        logger.exception(f"Error in comparing questions with GPT-4o: {e}")
+        logger.error(f"Error in comparing questions with GPT-4o: {e}")
         return {"question1_score": 0, "question2_score": 0, "explanation": "Failed to compare questions", "winner": "None"}
 
 @safe_api_call
-async def compare_questions_claude(context: str, original_question: str, original_answer: str,
-                                   basic_question: str, basic_answer: str,
-                                   enhanced_question: str, enhanced_answer: str) -> Dict[str, Any]:
+def compare_questions_claude(context: str, original_question: str, original_answer: str,
+                             basic_question: str, basic_answer: str,
+                             enhanced_question: str, enhanced_answer: str) -> Dict[str, Any]:
     try:
         # Define the tool (function) with the expected output schema
         tool = {
@@ -217,7 +206,7 @@ Provide your answer using the 'question_comparison_evaluator' tool, and output t
         ]
 
         # Call the API with the structured output parameters
-        response = await claude_client.acompletion(
+        response = claude_client.messages.create(
             model="claude-3-5-sonnet-20240620",
             max_tokens=1024,
             tools=[tool],
@@ -225,14 +214,10 @@ Provide your answer using the 'question_comparison_evaluator' tool, and output t
             messages=messages
         )
 
-        json_response = response.completion.strip()
-        parsed_response = safe_json_parse(json_response)
-        if parsed_response is None:
-            raise ValueError("Failed to parse JSON response")
-        return parsed_response
+        return response.content[0].input
 
     except Exception as e:
-        logger.exception(f"Error in comparing questions with Claude: {e}")
+        logger.error(f"Error in comparing questions with Claude: {e}")
         return {
             "question1_score": 0,
             "question2_score": 0,
@@ -241,11 +226,11 @@ Provide your answer using the 'question_comparison_evaluator' tool, and output t
         }
 
 @safe_api_call
-async def compare_questions_cohere(context: str, original_question: str, original_answer: str,
-                                   basic_question: str, basic_answer: str,
-                                   enhanced_question: str, enhanced_answer: str) -> Dict[str, Any]:
+def compare_questions_cohere(context: str, original_question: str, original_answer: str,
+                             basic_question: str, basic_answer: str,
+                             enhanced_question: str, enhanced_answer: str) -> Dict[str, Any]:
     try:
-        res = await cohere_client.chat(
+        res = cohere_client.chat(
             model="command-r-plus-08-2024",
             messages=[
                 {
@@ -270,16 +255,13 @@ Evaluate Question 1 and Question 2 based on the following criteria:
 2. Semantic similarity to the original question
 3. How well the generated answer matches the original answer
 
-Score each question-answer pair on a scale of 0 to 10.
-
+Score each question-answer pair on a scale of 0 to 10. Provide a detailed explanation for your evaluation, addressing each of the criteria mentioned above. Finally, determine which question (Question 1 or Question 2) is better overall and explain why.
 Provide your answer in JSON format with the following structure:
 
-{{
-    "question1_score": <number>,
-    "question2_score": <number>,
-    "explanation": "<string>",
-    "winner": "<string>"  // Should be either "Question 1" or "Question 2"
-}}
+"question1_score": <integer>,
+"question2_score": <integer>,
+"explanation": <string>,
+"winner": <string>
 
 Ensure that your response can be parsed as valid JSON.
 """
@@ -300,28 +282,32 @@ Ensure that your response can be parsed as valid JSON.
             },
         )
 
-        json_response = res.content.strip()
+        json_response = res.message.content[0].text.strip()
         parsed_response = safe_json_parse(json_response)
         if parsed_response is None:
             raise ValueError("Failed to parse JSON response")
         return parsed_response
 
     except Exception as e:
-        logger.exception(f"Error in comparing questions with Cohere: {e}")
+        logger.error(f"Error in comparing questions with Cohere: {e}")
         return {"question1_score": 0, "question2_score": 0, "explanation": "Failed to compare questions", "winner": "None"}
 
+
+class ComparisonResult(BaseModel):
+    question1_score: float
+    question2_score: float
+    explanation: str
+    winner: str
+
+    class Config:
+        arbitrary_types_allowed = True  # Allow arbitrary types if needed
+
+
 @safe_api_call
-async def compare_questions_gemini(context: str, original_question: str, original_answer: str,
-                                   basic_question: str, basic_answer: str,
-                                   enhanced_question: str, enhanced_answer: str) -> Dict[str, Any]:
+def compare_questions_gemini(context: str, original_question: str, original_answer: str,
+                             basic_question: str, basic_answer: str,
+                             enhanced_question: str, enhanced_answer: str) -> Dict[str, Any]:
     try:
-
-        class ComparisonResult(Dict):
-            question1_score: float
-            question2_score: float
-            explanation: str
-            winner: str
-
         prompt = f"""You are an expert in evaluating question-answer pairs based on a given context.
 
 Compare the following two generated question-answer pairs based on the given context and the original question-answer pair. Evaluate their quality and relevance.
@@ -356,7 +342,7 @@ Provide your answer in JSON format with the following structure:
 Ensure that your response can be parsed as valid JSON.
 """
 
-        result = await gemini_model.generate_content(
+        result = gemini_model.generate_content(
             prompt,
             generation_config=genai.GenerationConfig(
                 response_mime_type="application/json",
@@ -370,13 +356,19 @@ Ensure that your response can be parsed as valid JSON.
         parsed_response["winner"] = parsed_response["winner"].capitalize()
         return parsed_response
     except Exception as e:
-        logger.exception(f"Error in comparing questions with Gemini: {e}")
-        return {"question1_score": 0, "question2_score": 0, "explanation": "Failed to compare questions", "winner": "None"}
+        logger.error(f"Error in comparing questions with Gemini: {e}")
+        return {
+            "question1_score": 0,
+            "question2_score": 0,
+            "explanation": "Failed to compare questions",
+            "winner": "None"
+        }
+
 
 @safe_api_call
-async def compare_questions_qwen(context: str, original_question: str, original_answer: str,
-                                 basic_question: str, basic_answer: str,
-                                 enhanced_question: str, enhanced_answer: str) -> Dict[str, Any]:
+def compare_questions_qwen(context: str, original_question: str, original_answer: str,
+                           basic_question: str, basic_answer: str,
+                           enhanced_question: str, enhanced_answer: str) -> Dict[str, Any]:
     try:
         prompt = f"""You are an expert in evaluating question-answer pairs based on a given context.
 
@@ -402,27 +394,23 @@ Score each question-answer pair on a scale of 0 to 10.
 
 Provide your answer in JSON format with the following structure:
 
-{{
-    "question1_score": <number>,
-    "question2_score": <number>,
-    "explanation": "<string>",
-    "winner": "<string>"  // Should be either "Question 1" or "Question 2"
-}}
+"question1_score": <number>,
+"question2_score": <number>,
+"explanation": "<string>",
+"winner": "<string>"  // Should be either "Question 1" or "Question 2"
 
 Ensure that your response can be parsed as valid JSON.
 """
 
         messages = [{"role": "user", "content": prompt}]
-        output = await hf_client.chat(
+        output = hf_client.chat.completions.create(
             model="Qwen/Qwen2.5-72B-Instruct",
-            inputs=messages,
-            parameters={
-                "temperature": 0.5,
-                "max_new_tokens": 1024,
-                "top_p": 0.7
-            }
+            messages=messages,
+            temperature=0.5,
+            max_tokens=1024,
+            top_p=0.7
         )
-        response_text = output.generated_text.strip()
+        response_text = output.choices[0].message.content.strip()
         parsed_response = safe_json_parse(response_text)
         if parsed_response is None:
             # Try to extract JSON content
@@ -440,20 +428,19 @@ Ensure that your response can be parsed as valid JSON.
                 raise ValueError("Failed to parse JSON response")
         return parsed_response
     except Exception as e:
-        logger.exception(f"Error in comparing questions with Qwen: {e}")
+        logger.error(f"Error in comparing questions with Qwen: {e}")
         return {"question1_score": 0, "question2_score": 0, "explanation": "Failed to compare questions", "winner": "None"}
 
-async def process_entry(entry):
+def process_entry(entry):
     result = {}  # Initialize the result dict
 
-    idx_in_dataset = entry['id']  # Assuming each entry has a unique 'id' field
     # Extract data from entry
     try:
         context = sanitize_text(entry['context'])
         answer = sanitize_text(entry['answers']['text'][0])
-        initial_question = sanitize_text(entry['question'])
+        original_question = sanitize_text(entry['question'])
     except Exception as e:
-        logger.error(f"Error extracting data from entry {idx_in_dataset}: {e}")
+        logger.error(f"Error extracting data from entry: {e}")
         result.update({
             'Error': 'Failed to extract data from entry',
             'Context': None,
@@ -474,23 +461,23 @@ async def process_entry(entry):
 
     result.update({
         'Context': context,
-        'Original Question': initial_question,
+        'Original Question': original_question,
         'Original Answer': answer
     })
 
     # Generate basic question
     try:
-        basic_question = generate_basic_question(context, answer, initial_question)
+        basic_question = generate_basic_question(context, answer, original_question)
     except Exception as e:
-        logger.error(f"Error generating basic question for entry {idx_in_dataset}: {e}")
+        logger.error(f"Error generating basic question: {e}")
         basic_question = 'Error generating basic question'
     result['Basic Question'] = basic_question
 
     # Generate enhanced question
     try:
-        detailed_scores, rankings, enhanced_question = rank_questions_with_details(context, answer, initial_question)
+        detailed_scores, rankings, enhanced_question = rank_questions_with_details(context, answer, original_question)
     except Exception as e:
-        logger.error(f"Error generating enhanced question for entry {idx_in_dataset}: {e}")
+        logger.error(f"Error generating enhanced question: {e}")
         enhanced_question = 'Error generating enhanced question'
     result['Enhanced Question'] = enhanced_question
 
@@ -498,7 +485,7 @@ async def process_entry(entry):
     try:
         basic_answer = generate_answer(context, basic_question)
     except Exception as e:
-        logger.error(f"Error generating basic answer for entry {idx_in_dataset}: {e}")
+        logger.error(f"Error generating basic answer: {e}")
         basic_answer = 'Error generating basic answer'
     result['Basic Answer'] = basic_answer
 
@@ -506,7 +493,7 @@ async def process_entry(entry):
     try:
         enhanced_answer = generate_answer(context, enhanced_question)
     except Exception as e:
-        logger.error(f"Error generating enhanced answer for entry {idx_in_dataset}: {e}")
+        logger.error(f"Error generating enhanced answer: {e}")
         enhanced_answer = 'Error generating enhanced answer'
     result['Enhanced Answer'] = enhanced_answer
 
@@ -514,64 +501,74 @@ async def process_entry(entry):
     vote_counts = {"Question 1": 0, "Question 2": 0}
 
     # Collect comparison results from each LLM judge
-    # Use asyncio.gather to run them concurrently
-    compare_tasks = [
-        compare_questions_gpt4o(
-            context, initial_question, answer,
-            basic_question, basic_answer,
-            enhanced_question, enhanced_answer
-        ),
-        compare_questions_claude(
-            context, initial_question, answer,
-            basic_question, basic_answer,
-            enhanced_question, enhanced_answer
-        ),
-        compare_questions_cohere(
-            context, initial_question, answer,
-            basic_question, basic_answer,
-            enhanced_question, enhanced_answer
-        ),
-        compare_questions_gemini(
-            context, initial_question, answer,
-            basic_question, basic_answer,
-            enhanced_question, enhanced_answer
-        ),
-        compare_questions_qwen(
-            context, initial_question, answer,
-            basic_question, basic_answer,
-            enhanced_question, enhanced_answer
-        ),
-    ]
+    comparison_results = {}
 
-    comparison_results = await asyncio.gather(*compare_tasks, return_exceptions=True)
+    # GPT-4o
+    result_gpt4o = compare_questions_gpt4o(
+        context, original_question, answer,
+        basic_question, basic_answer,
+        enhanced_question, enhanced_answer
+    )
+    result['GPT-4o Verdict'] = result_gpt4o.get('winner', 'Error')
+    if result_gpt4o['winner'] in vote_counts:
+        vote_counts[result_gpt4o['winner']] += 1
 
-    # Process comparison results
-    model_names = ['GPT-4o', 'Claude', 'Cohere', 'Gemini', 'Qwen']
-    for model_name, result_model in zip(model_names, comparison_results):
-        if isinstance(result_model, Exception):
-            logger.error(f"Error in {model_name} comparison for entry {idx_in_dataset}: {result_model}")
-            verdict = 'Error'
-        else:
-            verdict = result_model.get('winner', 'Error')
-            if verdict in vote_counts:
-                vote_counts[verdict] += 1
-        result[f'{model_name} Verdict'] = verdict
+    # Claude
+    result_claude = compare_questions_claude(
+        context, original_question, answer,
+        basic_question, basic_answer,
+        enhanced_question, enhanced_answer
+    )
+    result['Claude Verdict'] = result_claude.get('winner', 'Error')
+    if result_claude['winner'] in vote_counts:
+        vote_counts[result_claude['winner']] += 1
+
+    # Cohere
+    result_cohere = compare_questions_cohere(
+        context, original_question, answer,
+        basic_question, basic_answer,
+        enhanced_question, enhanced_answer
+    )
+    result['Cohere Verdict'] = result_cohere.get('winner', 'Error')
+    if result_cohere['winner'] in vote_counts:
+        vote_counts[result_cohere['winner']] += 1
+
+    # Gemini
+    result_gemini = compare_questions_gemini(
+        context, original_question, answer,
+        basic_question, basic_answer,
+        enhanced_question, enhanced_answer
+    )
+    result['Gemini Verdict'] = result_gemini.get('winner', 'Error')
+    if result_gemini['winner'] in vote_counts:
+        vote_counts[result_gemini['winner']] += 1
+
+    # Qwen
+    result_qwen = compare_questions_qwen(
+        context, original_question, answer,
+        basic_question, basic_answer,
+        enhanced_question, enhanced_answer
+    )
+    result['Qwen Verdict'] = result_qwen.get('winner', 'Error')
+    if result_qwen['winner'] in vote_counts:
+        vote_counts[result_qwen['winner']] += 1
 
     # Determine final verdict
     try:
+        final_verdict_key = max(vote_counts, key=vote_counts.get)
         if vote_counts['Question 1'] == vote_counts['Question 2']:
             final_verdict = 'Draw'
         else:
             # Map 'Question 1' to 'Enhanced', 'Question 2' to 'Basic'
-            final_verdict = 'Enhanced' if vote_counts['Question 1'] > vote_counts['Question 2'] else 'Basic'
+            final_verdict = 'Enhanced' if final_verdict_key == 'Question 1' else 'Basic'
     except Exception as e:
-        logger.error(f"Error determining final verdict for entry {idx_in_dataset}: {e}")
+        logger.error(f"Error determining final verdict: {e}")
         final_verdict = 'Error'
     result['Final Verdict'] = final_verdict
 
     return result
 
-async def main():
+def main():
     parser = argparse.ArgumentParser(description='Benchmark Script')
     parser.add_argument('--num_entries', type=str, default='all', help='Number of entries to process')
     parser.add_argument('--random_seed', type=int, default=42, help='Random seed')
@@ -601,7 +598,7 @@ async def main():
             idx_global = idx_in_entries + args.start_index
             print(f"Processing entry {idx_global + 1}/{args.start_index + total_entries} (Dataset Index: {idx_in_dataset})...")
             try:
-                result = await process_entry(entry)
+                result = process_entry(entry)
                 # Write result to CSV
                 writer.writerow(result)
                 csvfile.flush()
@@ -618,7 +615,7 @@ async def main():
                     )
                     total_vote_counts[key] += total_votes
             except Exception as e:
-                logger.exception(f"Error processing entry {idx_in_dataset}: {e}")
+                logger.error(f"Error processing entry {idx_in_dataset}: {e}")
                 continue
 
     # Read the CSV file into a DataFrame for summary
@@ -653,7 +650,7 @@ Draws: {final_verdicts.get('Draw', 0)} ({percentage_draw:.2f}%)
 
 if __name__ == "__main__":
     try:
-        asyncio.run(main())
+        main()
     except KeyboardInterrupt:
         logger.info("Script interrupted by user.")
         sys.exit(0)
