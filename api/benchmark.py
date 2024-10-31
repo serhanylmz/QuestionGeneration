@@ -11,10 +11,10 @@ from collections import Counter
 import typing_extensions as typing
 
 # Import the required functions from the pipeline file
-from pipeline_gradio_experimental import generate_basic_question, rank_questions_with_details, generate_answer
+from pipeline import generate_basic_question, rank_questions_with_details, generate_answer
 
 # Set up logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.WARNING)
 logger = logging.getLogger(__name__)
 
 # Load environment variables
