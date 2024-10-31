@@ -10,3 +10,4 @@ anthropic
 cohere
 google-generativeai
 huggingface-hub
+tenacity
