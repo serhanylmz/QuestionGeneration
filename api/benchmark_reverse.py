@@ -1,20 +1,27 @@
 import os
+import sys
 import logging
 import json
 import pandas as pd
 from datasets import load_dataset
 import random
-from typing import List, Dict
+from typing import List, Dict, Any
 from dotenv import load_dotenv
-import asyncio
+import csv
+import argparse
+from tqdm import tqdm
+from tenacity import retry, wait_exponential, stop_after_attempt
 from collections import Counter
-import typing_extensions as typing
+from pydantic import BaseModel
 
 # Import the required functions from the pipeline file
 from pipeline import generate_basic_question, rank_questions_with_details, generate_answer
 
 # Set up logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO,
+                    filename='benchmark.log',
+                    filemode='a',
+                    format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 # Load environment variables
@@ -45,43 +52,84 @@ hf_client = InferenceClient(api_key=hf_api_key)
 # Load the SQuAD dataset
 dataset = load_dataset("rajpurkar/squad")
 
+def check_api_keys():
+    required_keys = ["OPENAI_API_KEY", "CLAUDE_API_KEY", "COHERE_API_KEY", "GEMINI_API_KEY", "HF_API_KEY"]
+    missing_keys = [key for key in required_keys if not os.environ.get(key)]
+    if missing_keys:
+        logger.error(f"Missing API keys: {', '.join(missing_keys)}")
+        sys.exit(1)
+
+check_api_keys()
+
 def get_random_entries(num_entries, random_seed):
     dataset_size = len(dataset['train'])
+    random.seed(random_seed)
     if num_entries == 'all':
-        return dataset['train']
+        indices = list(range(dataset_size))
     else:
         num_entries = int(num_entries)
-        random.seed(random_seed)
         indices = random.sample(range(dataset_size), num_entries)
-        return dataset['train'].select(indices)
+    return indices
 
+
+def sanitize_text(text):
+    return text.strip()
+
+def safe_json_parse(response_text):
+    try:
+        return json.loads(response_text)
+    except json.JSONDecodeError as e:
+        logger.error(f"JSON decoding failed: {e}")
+        return None
+
+def safe_api_call(func):
+    @retry(wait=wait_exponential(min=1, max=10), stop=stop_after_attempt(3))
+    def wrapper(*args, **kwargs):
+        return func(*args, **kwargs)
+    return wrapper
+
+# Modify compare functions to include retries and keep API calls consistent with the initial code
+
+@safe_api_call
 def compare_questions_gpt4o(context: str, original_question: str, original_answer: str,
                             basic_question: str, basic_answer: str,
-                            enhanced_question: str, enhanced_answer: str) -> Dict[str, any]:
+                            enhanced_question: str, enhanced_answer: str) -> Dict[str, Any]:
     try:
         response = gpt_client.chat.completions.create(
             model="gpt-4o-2024-08-06",
             messages=[
                 {"role": "system", "content": "You are an expert in evaluating question-answer pairs based on a given context."},
-                {"role": "user", "content": f"""Compare the following two generated question-answer pairs based on the given context and the original question-answer pair. Evaluate their quality and relevance.
+                {"role": "user", "content": f"""You are an expert in evaluating question-answer pairs based on a given context.
+
+Compare the following two generated question-answer pairs based on the given context and the original question-answer pair. Evaluate their quality and relevance.
 
 Context: {context}
 
 Original Question: {original_question}
 Original Answer: {original_answer}
 
-Question 1: {basic_question}
-Answer 1: {basic_answer}
+Question 1: {enhanced_question}
+Answer 1: {enhanced_answer}
 
-Question 2: {enhanced_question}
-Answer 2: {enhanced_answer}
+Question 2: {basic_question}
+Answer 2: {basic_answer}
 
 Evaluate Question 1 and Question 2 based on the following criteria:
 1. Structural difference from the original question
 2. Semantic similarity to the original question
 3. How well the generated answer matches the original answer
 
-Score each question-answer pair on a scale of 0 to 10. Provide a detailed explanation for your evaluation, addressing each of the criteria mentioned above. Finally, determine which question (Question 1 or Question 2) is better overall and explain why."""}
+Score each question-answer pair on a scale of 0 to 10.
+
+Provide your answer in JSON format with the following structure:
+
+"question1_score": <number>,
+"question2_score": <number>,
+"explanation": "<string>",
+"winner": "<string>"  // Should be either "Question 1" or "Question 2", you must pick a winner, it cannot be a draw.
+
+Ensure that your response can be parsed as valid JSON.
+"""}
             ],
             response_format={
                 "type": "json_schema",
@@ -107,9 +155,10 @@ Score each question-answer pair on a scale of 0 to 10. Provide a detailed explan
         logger.error(f"Error in comparing questions with GPT-4o: {e}")
         return {"question1_score": 0, "question2_score": 0, "explanation": "Failed to compare questions", "winner": "None"}
 
+@safe_api_call
 def compare_questions_claude(context: str, original_question: str, original_answer: str,
                              basic_question: str, basic_answer: str,
-                             enhanced_question: str, enhanced_answer: str) -> Dict[str, any]:
+                             enhanced_question: str, enhanced_answer: str) -> Dict[str, Any]:
     try:
         # Define the tool (function) with the expected output schema
         tool = {
@@ -141,11 +190,11 @@ Context: {context}
 Original Question: {original_question}
 Original Answer: {original_answer}
 
-Question 1: {basic_question}
-Answer 1: {basic_answer}
+Question 1: {enhanced_question}
+Answer 1: {enhanced_answer}
 
-Question 2: {enhanced_question}
-Answer 2: {enhanced_answer}
+Question 2: {basic_question}
+Answer 2: {basic_answer}
 
 Evaluate Question 1 and Question 2 based on the following criteria:
 1. Structural difference from the original question
@@ -154,9 +203,15 @@ Evaluate Question 1 and Question 2 based on the following criteria:
 
 Score each question-answer pair on a scale of 0 to 10.
 
-Finally, determine which question (Question 1 or Question 2) is better overall.
+Provide your answer in JSON format with the following structure:
 
-Provide your answer using the 'question_comparison_evaluator' tool, and output the result in structured JSON format."""
+"question1_score": <number>,
+"question2_score": <number>,
+"explanation": "<string>",
+"winner": "<string>"  // Should be either "Question 1" or "Question 2", you must pick a winner, it cannot be a draw.
+
+Ensure that your response can be parsed as valid JSON.
+"""
             }
         ]
 
@@ -180,10 +235,10 @@ Provide your answer using the 'question_comparison_evaluator' tool, and output t
             "winner": "None"
         }
 
-
+@safe_api_call
 def compare_questions_cohere(context: str, original_question: str, original_answer: str,
                              basic_question: str, basic_answer: str,
-                             enhanced_question: str, enhanced_answer: str) -> Dict[str, any]:
+                             enhanced_question: str, enhanced_answer: str) -> Dict[str, Any]:
     try:
         res = cohere_client.chat(
             model="command-r-plus-08-2024",
@@ -199,24 +254,25 @@ Context: {context}
 Original Question: {original_question}
 Original Answer: {original_answer}
 
-Question 1: {basic_question}
-Answer 1: {basic_answer}
+Question 1: {enhanced_question}
+Answer 1: {enhanced_answer}
 
-Question 2: {enhanced_question}
-Answer 2: {enhanced_answer}
+Question 2: {basic_question}
+Answer 2: {basic_answer}
 
 Evaluate Question 1 and Question 2 based on the following criteria:
 1. Structural difference from the original question
 2. Semantic similarity to the original question
 3. How well the generated answer matches the original answer
 
-Score each question-answer pair on a scale of 0 to 10. Provide a detailed explanation for your evaluation, addressing each of the criteria mentioned above. Finally, determine which question (Question 1 or Question 2) is better overall and explain why.
+Score each question-answer pair on a scale of 0 to 10.
+
 Provide your answer in JSON format with the following structure:
 
-"question1_score": <integer>,
-"question2_score": <integer>,
-"explanation": <string>,
-"winner": <string>
+"question1_score": <number>,
+"question2_score": <number>,
+"explanation": "<string>",
+"winner": "<string>"  // Should be either "Question 1" or "Question 2", you must pick a winner, it cannot be a draw.
 
 Ensure that your response can be parsed as valid JSON.
 """
@@ -238,7 +294,9 @@ Ensure that your response can be parsed as valid JSON.
         )
 
         json_response = res.message.content[0].text.strip()
-        parsed_response = json.loads(json_response)
+        parsed_response = safe_json_parse(json_response)
+        if parsed_response is None:
+            raise ValueError("Failed to parse JSON response")
         return parsed_response
 
     except Exception as e:
@@ -246,17 +304,21 @@ Ensure that your response can be parsed as valid JSON.
         return {"question1_score": 0, "question2_score": 0, "explanation": "Failed to compare questions", "winner": "None"}
 
 
+class ComparisonResult(BaseModel):
+    question1_score: float
+    question2_score: float
+    explanation: str
+    winner: str
+
+    class Config:
+        arbitrary_types_allowed = True  # Allow arbitrary types if needed
+
+
+@safe_api_call
 def compare_questions_gemini(context: str, original_question: str, original_answer: str,
                              basic_question: str, basic_answer: str,
-                             enhanced_question: str, enhanced_answer: str) -> Dict[str, any]:
+                             enhanced_question: str, enhanced_answer: str) -> Dict[str, Any]:
     try:
-
-        class ComparisonResult(typing.TypedDict):
-            question1_score: float
-            question2_score: float
-            explanation: str
-            winner: str
-
         prompt = f"""You are an expert in evaluating question-answer pairs based on a given context.
 
 Compare the following two generated question-answer pairs based on the given context and the original question-answer pair. Evaluate their quality and relevance.
@@ -266,18 +328,28 @@ Context: {context}
 Original Question: {original_question}
 Original Answer: {original_answer}
 
-Question 1: {basic_question}
-Answer 1: {basic_answer}
+Question 1: {enhanced_question}
+Answer 1: {enhanced_answer}
 
-Question 2: {enhanced_question}
-Answer 2: {enhanced_answer}
+Question 2: {basic_question}
+Answer 2: {basic_answer}
 
 Evaluate Question 1 and Question 2 based on the following criteria:
 1. Structural difference from the original question
 2. Semantic similarity to the original question
 3. How well the generated answer matches the original answer
 
-Score each question-answer pair on a scale of 0 to 10. Provide a detailed explanation for your evaluation, addressing each of the criteria mentioned above. Finally, determine which question (Question 1 or Question 2) is better overall and explain why."""
+Score each question-answer pair on a scale of 0 to 10.
+
+Provide your answer in JSON format with the following structure:
+
+"question1_score": <number>,
+"question2_score": <number>,
+"explanation": "<string>",
+"winner": "<string>"  // Should be either "Question 1" or "Question 2", you must pick a winner, it cannot be a draw.
+
+Ensure that your response can be parsed as valid JSON.
+"""
 
         result = gemini_model.generate_content(
             prompt,
@@ -287,16 +359,25 @@ Score each question-answer pair on a scale of 0 to 10. Provide a detailed explan
             ),
         )
         json_response = result.text.strip()
-        parsed_response = json.loads(json_response)
-        parsed_response["winner"] = parsed_response["winner"]
+        parsed_response = safe_json_parse(json_response)
+        if parsed_response is None:
+            raise ValueError("Failed to parse JSON response")
+        parsed_response["winner"] = parsed_response["winner"].capitalize()
         return parsed_response
     except Exception as e:
         logger.error(f"Error in comparing questions with Gemini: {e}")
-        return {"question1_score": 0, "question2_score": 0, "explanation": "Failed to compare questions", "winner": "None"}
+        return {
+            "question1_score": 0,
+            "question2_score": 0,
+            "explanation": "Failed to compare questions",
+            "winner": "None"
+        }
 
+
+@safe_api_call
 def compare_questions_qwen(context: str, original_question: str, original_answer: str,
                            basic_question: str, basic_answer: str,
-                           enhanced_question: str, enhanced_answer: str) -> Dict[str, any]:
+                           enhanced_question: str, enhanced_answer: str) -> Dict[str, Any]:
     try:
         prompt = f"""You are an expert in evaluating question-answer pairs based on a given context.
 
@@ -307,25 +388,25 @@ Context: {context}
 Original Question: {original_question}
 Original Answer: {original_answer}
 
-Question 1: {basic_question}
-Answer 1: {basic_answer}
+Question 1: {enhanced_question}
+Answer 1: {enhanced_answer}
 
-Question 2: {enhanced_question}
-Answer 2: {enhanced_answer}
+Question 2: {basic_question}
+Answer 2: {basic_answer}
 
 Evaluate Question 1 and Question 2 based on the following criteria:
 1. Structural difference from the original question
 2. Semantic similarity to the original question
 3. How well the generated answer matches the original answer
 
-Score each question-answer pair on a scale of 0 to 10. Provide a detailed explanation for your evaluation, addressing each of the criteria mentioned above. Finally, determine which question (Question 1 or Question 2) is better overall and explain why.
+Score each question-answer pair on a scale of 0 to 10.
 
 Provide your answer in JSON format with the following structure:
 
-"question1_score": <integer>,
-"question2_score": <integer>,
-"explanation": <string>,
-"winner": <string>
+"question1_score": <number>,
+"question2_score": <number>,
+"explanation": "<string>",
+"winner": "<string>"  // Should be either "Question 1" or "Question 2", you must pick a winner, it cannot be a draw.
 
 Ensure that your response can be parsed as valid JSON.
 """
@@ -338,36 +419,101 @@ Ensure that your response can be parsed as valid JSON.
             max_tokens=1024,
             top_p=0.7
         )
-        response_text = output.choices[0].message.content
-        # print("Raw response:", repr(response_text))
-
-        # Function to extract JSON content
-        import re
-        def extract_json_content(text):
-            pattern = r"\{.*\}"
-            matches = re.findall(pattern, text, re.DOTALL)
-            if matches:
-                return matches[0]
-            else:
-                return text.strip()
-
-        json_response = extract_json_content(response_text)
-        # print("Extracted JSON:", json_response)
-        parsed_response = json.loads(json_response)
+        response_text = output.choices[0].message.content.strip()
+        parsed_response = safe_json_parse(response_text)
+        if parsed_response is None:
+            # Try to extract JSON content
+            import re
+            def extract_json_content(text):
+                pattern = r"\{.*\}"
+                matches = re.findall(pattern, text, re.DOTALL)
+                if matches:
+                    return matches[0]
+                else:
+                    return text.strip()
+            json_response = extract_json_content(response_text)
+            parsed_response = safe_json_parse(json_response)
+            if parsed_response is None:
+                raise ValueError("Failed to parse JSON response")
         return parsed_response
     except Exception as e:
         logger.error(f"Error in comparing questions with Qwen: {e}")
         return {"question1_score": 0, "question2_score": 0, "explanation": "Failed to compare questions", "winner": "None"}
 
+@safe_api_call
+def compare_questions_llama(context: str, original_question: str, original_answer: str,
+                           basic_question: str, basic_answer: str,
+                           enhanced_question: str, enhanced_answer: str) -> Dict[str, Any]:
+    try:
+        prompt = f"""You are an expert in evaluating question-answer pairs based on a given context.
+
+Compare the following two generated question-answer pairs based on the given context and the original question-answer pair. Evaluate their quality and relevance.
+
+Context: {context}
+
+Original Question: {original_question}
+Original Answer: {original_answer}
+
+Question 1: {enhanced_question}
+Answer 1: {enhanced_answer}
+
+Question 2: {basic_question}
+Answer 2: {basic_answer}
+
+Evaluate Question 1 and Question 2 based on the following criteria:
+1. Structural difference from the original question
+2. Semantic similarity to the original question
+3. How well the generated answer matches the original answer
+
+Score each question-answer pair on a scale of 0 to 10.
+
+Provide your answer in JSON format with the following structure:
+
+"question1_score": <number>,
+"question2_score": <number>,
+"explanation": "<string>",
+"winner": "<string>"  // Should be either "Question 1" or "Question 2", you must pick a winner, it cannot be a draw.
+
+Ensure that your response can be parsed as valid JSON.
+"""
+
+        messages = [{"role": "user", "content": prompt}]
+        output = hf_client.chat.completions.create(
+            model="meta-llama/Llama-3.1-70B-Instruct",
+            messages=messages,
+            temperature=0.5,
+            max_tokens=1024,
+            top_p=0.7
+        )
+        response_text = output.choices[0].message.content.strip()
+        parsed_response = safe_json_parse(response_text)
+        if parsed_response is None:
+            # Try to extract JSON content
+            import re
+            def extract_json_content(text):
+                pattern = r"\{.*\}"
+                matches = re.findall(pattern, text, re.DOTALL)
+                if matches:
+                    return matches[0]
+                else:
+                    return text.strip()
+            json_response = extract_json_content(response_text)
+            parsed_response = safe_json_parse(json_response)
+            if parsed_response is None:
+                raise ValueError("Failed to parse JSON response")
+        return parsed_response
+    except Exception as e:
+        logger.error(f"Error in comparing questions with LLaMA: {e}")
+        return {"question1_score": 0, "question2_score": 0, "explanation": "Failed to compare questions", "winner": "None"}
 
 def process_entry(entry):
     result = {}  # Initialize the result dict
 
     # Extract data from entry
     try:
-        context = entry['context']
-        answer = entry['answers']['text'][0]
-        initial_question = entry['question']
+        context = sanitize_text(entry['context'])
+        answer = sanitize_text(entry['answers']['text'][0])
+        original_question = sanitize_text(entry['question'])
     except Exception as e:
         logger.error(f"Error extracting data from entry: {e}")
         result.update({
@@ -384,19 +530,20 @@ def process_entry(entry):
             'Cohere Verdict': None,
             'Gemini Verdict': None,
             'Qwen Verdict': None,
+            'LLaMA Verdict': None,
             'Final Verdict': None
         })
         return result
 
     result.update({
         'Context': context,
-        'Original Question': initial_question,
+        'Original Question': original_question,
         'Original Answer': answer
     })
 
     # Generate basic question
     try:
-        basic_question = generate_basic_question(context, answer, initial_question)
+        basic_question = generate_basic_question(context, answer, original_question)
     except Exception as e:
         logger.error(f"Error generating basic question: {e}")
         basic_question = 'Error generating basic question'
@@ -404,7 +551,7 @@ def process_entry(entry):
 
     # Generate enhanced question
     try:
-        detailed_scores, rankings, enhanced_question = rank_questions_with_details(context, answer, initial_question)
+        detailed_scores, rankings, enhanced_question = rank_questions_with_details(context, answer, original_question)
     except Exception as e:
         logger.error(f"Error generating enhanced question: {e}")
         enhanced_question = 'Error generating enhanced question'
@@ -429,103 +576,65 @@ def process_entry(entry):
     # Initialize vote counts
     vote_counts = {"Question 1": 0, "Question 2": 0}
 
-    # Collect comparison results from each LLM judge
-    comparison_results = {}
-
     # GPT-4o
-    try:
-        result_gpt4o = compare_questions_gpt4o(
-            context, initial_question, answer,
-            basic_question, basic_answer,
-            enhanced_question, enhanced_answer
-        )
-    except Exception as e:
-        logger.error(f"Error in GPT-4o comparison: {e}")
-        result_gpt4o = {
-            'winner': 'Error',
-            'question1_score': 0,
-            'question2_score': 0,
-            'explanation': 'Error in GPT-4o comparison'
-        }
-    result['GPT-4o Verdict'] = result_gpt4o.get('winner', 'Error')
+    result_gpt4o = compare_questions_gpt4o(
+        context, original_question, answer,
+        enhanced_question, enhanced_answer,  # Now Question 2
+        basic_question, basic_answer        # Now Question 1
+    )
+    result['GPT-4o Verdict'] = 'Question 1' if result_gpt4o.get('winner') == 'Question 2' else 'Question 2' if result_gpt4o.get('winner') == 'Question 1' else 'Error'
     if result_gpt4o['winner'] in vote_counts:
-        vote_counts[result_gpt4o['winner']] += 1
+        vote_counts['Question 1' if result_gpt4o['winner'] == 'Question 2' else 'Question 2'] += 1
 
     # Claude
-    try:
-        result_claude = compare_questions_claude(
-            context, initial_question, answer,
-            basic_question, basic_answer,
-            enhanced_question, enhanced_answer
-        )
-    except Exception as e:
-        logger.error(f"Error in Claude comparison: {e}")
-        result_claude = {
-            'winner': 'Error',
-            'question1_score': 0,
-            'question2_score': 0,
-            'explanation': 'Error in Claude comparison'
-        }
-    result['Claude Verdict'] = result_claude.get('winner', 'Error')
+    result_claude = compare_questions_claude(
+        context, original_question, answer,
+        enhanced_question, enhanced_answer,  # Now Question 2
+        basic_question, basic_answer        # Now Question 1
+    )
+    result['Claude Verdict'] = 'Question 1' if result_claude.get('winner') == 'Question 2' else 'Question 2' if result_claude.get('winner') == 'Question 1' else 'Error'
     if result_claude['winner'] in vote_counts:
-        vote_counts[result_claude['winner']] += 1
+        vote_counts['Question 1' if result_claude['winner'] == 'Question 2' else 'Question 2'] += 1
 
     # Cohere
-    try:
-        result_cohere = compare_questions_cohere(
-            context, initial_question, answer,
-            basic_question, basic_answer,
-            enhanced_question, enhanced_answer
-        )
-    except Exception as e:
-        logger.error(f"Error in Cohere comparison: {e}")
-        result_cohere = {
-            'winner': 'Error',
-            'question1_score': 0,
-            'question2_score': 0,
-            'explanation': 'Error in Cohere comparison'
-        }
-    result['Cohere Verdict'] = result_cohere.get('winner', 'Error')
+    result_cohere = compare_questions_cohere(
+        context, original_question, answer,
+        enhanced_question, enhanced_answer,  # Now Question 2
+        basic_question, basic_answer        # Now Question 1
+    )
+    result['Cohere Verdict'] = 'Question 1' if result_cohere.get('winner') == 'Question 2' else 'Question 2' if result_cohere.get('winner') == 'Question 1' else 'Error'
     if result_cohere['winner'] in vote_counts:
-        vote_counts[result_cohere['winner']] += 1
+        vote_counts['Question 1' if result_cohere['winner'] == 'Question 2' else 'Question 2'] += 1
 
     # Gemini
-    try:
-        result_gemini = compare_questions_gemini(
-            context, initial_question, answer,
-            basic_question, basic_answer,
-            enhanced_question, enhanced_answer
-        )
-    except Exception as e:
-        logger.error(f"Error in Gemini comparison: {e}")
-        result_gemini = {
-            'winner': 'Error',
-            'question1_score': 0,
-            'question2_score': 0,
-            'explanation': 'Error in Gemini comparison'
-        }
-    result['Gemini Verdict'] = result_gemini.get('winner', 'Error')
+    result_gemini = compare_questions_gemini(
+        context, original_question, answer,
+        enhanced_question, enhanced_answer,  # Now Question 2
+        basic_question, basic_answer        # Now Question 1
+    )
+    result['Gemini Verdict'] = 'Question 1' if result_gemini.get('winner') == 'Question 2' else 'Question 2' if result_gemini.get('winner') == 'Question 1' else 'Error'
     if result_gemini['winner'] in vote_counts:
-        vote_counts[result_gemini['winner']] += 1
+        vote_counts['Question 1' if result_gemini['winner'] == 'Question 2' else 'Question 2'] += 1
 
     # Qwen
-    try:
-        result_qwen = compare_questions_qwen(
-            context, initial_question, answer,
-            basic_question, basic_answer,
-            enhanced_question, enhanced_answer
-        )
-    except Exception as e:
-        logger.error(f"Error in Qwen comparison: {e}")
-        result_qwen = {
-            'winner': 'Error',
-            'question1_score': 0,
-            'question2_score': 0,
-            'explanation': 'Error in Qwen comparison'
-        }
-    result['Qwen Verdict'] = result_qwen.get('winner', 'Error')
+    result_qwen = compare_questions_qwen(
+        context, original_question, answer,
+        enhanced_question, enhanced_answer,  # Now Question 2
+        basic_question, basic_answer        # Now Question 1
+    )
+    result['Qwen Verdict'] = 'Question 1' if result_qwen.get('winner') == 'Question 2' else 'Question 2' if result_qwen.get('winner') == 'Question 1' else 'Error'
     if result_qwen['winner'] in vote_counts:
-        vote_counts[result_qwen['winner']] += 1
+        vote_counts['Question 1' if result_qwen['winner'] == 'Question 2' else 'Question 2'] += 1
+
+    # LLaMA
+    result_llama = compare_questions_llama(
+        context, original_question, answer,
+        enhanced_question, enhanced_answer,  # Now Question 2
+        basic_question, basic_answer        # Now Question 1
+    )
+    result['LLaMA Verdict'] = 'Question 1' if result_llama.get('winner') == 'Question 2' else 'Question 2' if result_llama.get('winner') == 'Question 1' else 'Error'
+    if result_llama['winner'] in vote_counts:
+        vote_counts['Question 1' if result_llama['winner'] == 'Question 2' else 'Question 2'] += 1
 
     # Determine final verdict
     try:
@@ -533,7 +642,7 @@ def process_entry(entry):
         if vote_counts['Question 1'] == vote_counts['Question 2']:
             final_verdict = 'Draw'
         else:
-            # Map 'Question 1' to 'Basic', 'Question 2' to 'Enhanced'
+            # Map 'Question 1' to 'Basic', 'Question 2' to 'Enhanced' (swapped mapping)
             final_verdict = 'Basic' if final_verdict_key == 'Question 1' else 'Enhanced'
     except Exception as e:
         logger.error(f"Error determining final verdict: {e}")
@@ -542,62 +651,97 @@ def process_entry(entry):
 
     return result
 
-
 def main():
-    num_entries = input("Enter the number of entries to test on (or 'all' to process the entire dataset): ")
-    random_seed = int(input("Enter a random seed (integer): "))
+    parser = argparse.ArgumentParser(description='Benchmark Script')
+    parser.add_argument('--num_entries', type=str, default='all', help='Number of entries to process')
+    parser.add_argument('--random_seed', type=int, default=42, help='Random seed')
+    parser.add_argument('--entries_file', type=str, default='benchmark_results.csv', help='CSV file to store results')
+    args = parser.parse_args()
 
-    entries = get_random_entries(num_entries, random_seed)
-    results = []
+    # Generate the indices based on the random seed and num_entries
+    indices = get_random_entries(args.num_entries, args.random_seed)
+    total_entries = len(indices)
+
+    # Read processed indices from existing entries file
+    processed_indices = set()
+    if os.path.exists(args.entries_file) and os.stat(args.entries_file).st_size > 0:
+        df_existing = pd.read_csv(args.entries_file)
+        if 'Index' in df_existing.columns:
+            processed_indices = set(df_existing['Index'].tolist())
+
+    # Determine which indices have not been processed yet
+    indices_to_process = [idx for idx in indices if idx not in processed_indices]
+    if not indices_to_process:
+        print("All entries have been processed. Exiting.")
+        return
+
+    print(f"Total entries to process: {len(indices_to_process)} out of {total_entries}")
+
+    # Select the entries to process
+    entries_to_process = dataset['train'].select(indices_to_process)
     total_vote_counts = Counter()
 
-    for idx_in_entries, entry in enumerate(entries):
-        idx_in_dataset = idx_in_entries  # Since entries are random, index in dataset is not sequential
-        print(f"Processing entry {idx_in_entries+1}/{len(entries)}...")
-        try:
-            result = process_entry(entry)
-            results.append(result)
-            # Update total vote counts
-            for key in ['Question 1', 'Question 2']:
-                total_votes = sum(
-                    1 for verdict in [
-                        result.get('GPT-4o Verdict'),
-                        result.get('Claude Verdict'),
-                        result.get('Cohere Verdict'),
-                        result.get('Gemini Verdict'),
-                        result.get('Qwen Verdict')
-                    ] if verdict == key
-                )
-                total_vote_counts[key] += total_votes
-        except Exception as e:
-            logger.error(f"Error processing entry {idx_in_dataset}: {e}")
-            continue
+    fieldnames = ['Index', 'Context', 'Original Question', 'Original Answer', 'Basic Question', 'Basic Answer',
+                  'Enhanced Question', 'Enhanced Answer', 'GPT-4o Verdict', 'Claude Verdict', 'Cohere Verdict',
+                  'Gemini Verdict', 'Qwen Verdict', 'LLaMA Verdict','Final Verdict']
 
-    # Create DataFrame
-    df = pd.DataFrame(results)
+    # Open the CSV file for appending
+    with open(args.entries_file, 'a', newline='', encoding='utf-8') as csvfile:
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
 
-    # Save to Excel
-    excel_filename = 'benchmark_results.xlsx'
-    df.to_excel(excel_filename, index=False)
-    print(f"Results saved to {excel_filename}")
+        # Write header if file is empty
+        if os.stat(args.entries_file).st_size == 0:
+            writer.writeheader()
+
+        # Progress bar
+        for idx_in_entries, (entry, idx_in_dataset) in enumerate(
+            tqdm(zip(entries_to_process, indices_to_process), total=len(indices_to_process), desc='Processing entries')
+        ):
+            print(f"Processing entry {idx_in_entries + 1}/{len(indices_to_process)} (Dataset Index: {idx_in_dataset})...")
+            try:
+                result = process_entry(entry)
+                result['Index'] = idx_in_dataset  # Add the index to the result
+                # Write result to CSV
+                writer.writerow(result)
+                csvfile.flush()
+                os.fsync(csvfile.fileno())
+                # Update total vote counts
+                for key in ['Question 1', 'Question 2']:
+                    total_votes = sum(
+                        1 for verdict in [
+                            result.get('GPT-4o Verdict'),
+                            result.get('Claude Verdict'),
+                            result.get('Cohere Verdict'),
+                            result.get('Gemini Verdict'),
+                            result.get('Qwen Verdict'),
+                            result.get('LLaMA Verdict')
+                        ] if verdict == key
+                    )
+                    total_vote_counts[key] += total_votes
+            except Exception as e:
+                logger.error(f"Error processing entry {idx_in_dataset}: {e}")
+                continue
+
+    # Read the CSV file into a DataFrame for summary
+    df = pd.read_csv(args.entries_file)
 
     # Generate summary
-    total_entries = len(results)
+    total_entries_processed = len(df)
     final_verdicts = df['Final Verdict'].value_counts()
-    percentage_basic = (final_verdicts.get('Basic', 0) / total_entries) * 100 if total_entries > 0 else 0
-    percentage_enhanced = (final_verdicts.get('Enhanced', 0) / total_entries) * 100 if total_entries > 0 else 0
-    percentage_draw = (final_verdicts.get('Draw', 0) / total_entries) * 100 if total_entries > 0 else 0
+    percentage_basic = (final_verdicts.get('Basic', 0) / total_entries_processed) * 100 if total_entries_processed > 0 else 0
+    percentage_enhanced = (final_verdicts.get('Enhanced', 0) / total_entries_processed) * 100 if total_entries_processed > 0 else 0
+    percentage_draw = (final_verdicts.get('Draw', 0) / total_entries_processed) * 100 if total_entries_processed > 0 else 0
 
     summary = f"""
-Total Entries Processed: {total_entries}
+Total Entries Processed: {total_entries_processed}
 
 Vote Counts:
-Question 1 (Basic) Votes: {total_vote_counts['Question 1']}
-Question 2 (Enhanced) Votes: {total_vote_counts['Question 2']}
+Question 1 (Enhanced) Votes: {total_vote_counts['Question 1']}
+Question 2 (Basic) Votes: {total_vote_counts['Question 2']}
 
 Final Verdicts:
-Basic Generation Wins: {final_verdicts.get('Basic', 0)} ({percentage_basic:.2f}%)
 Enhanced Generation Wins: {final_verdicts.get('Enhanced', 0)} ({percentage_enhanced:.2f}%)
+Basic Generation Wins: {final_verdicts.get('Basic', 0)} ({percentage_basic:.2f}%)
 Draws: {final_verdicts.get('Draw', 0)} ({percentage_draw:.2f}%)
 """
 
@@ -608,6 +752,9 @@ Draws: {final_verdicts.get('Draw', 0)} ({percentage_draw:.2f}%)
     print(f"Summary saved to {summary_filename}")
     print(summary)
 
-
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        logger.info("Script interrupted by user.")
+        sys.exit(0)
