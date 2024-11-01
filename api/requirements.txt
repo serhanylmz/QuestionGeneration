@@ -11,3 +11,6 @@ cohere
 google-generativeai
 huggingface-hub
 tenacity
+python-Levenshtein
+tqdm
+pydantic
