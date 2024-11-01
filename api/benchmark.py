@@ -14,6 +14,8 @@ from tenacity import retry, wait_exponential, stop_after_attempt
 from collections import Counter
 from pydantic import BaseModel
 
+#python benchmark.py --num_entries 250 --random_seed 42  
+
 # Import the required functions from the pipeline file
 from pipeline import generate_basic_question, rank_questions_with_details, generate_answer
 
