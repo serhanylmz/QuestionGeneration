@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 import asyncio
 
 # Import the required functions from the pipeline file
-from pipeline import generate_basic_question, rank_questions_with_details, generate_answer
+from pipeline_gradio import generate_basic_question, rank_questions_with_details, generate_answer
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
