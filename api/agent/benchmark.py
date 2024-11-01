@@ -1,22 +1,29 @@
 import os
+import sys
 import logging
 import json
 import pandas as pd
 from datasets import load_dataset
 import random
-from typing import List, Dict
+from typing import List, Dict, Any
 from dotenv import load_dotenv
-import asyncio
+import csv
+import argparse
+from tqdm import tqdm
+from tenacity import retry, wait_exponential, stop_after_attempt
 from collections import Counter
-import typing_extensions as typing
-import datetime
+from pydantic import BaseModel
 
-# Import the required functions from your paraphrasing system
-# Make sure to import your paraphrasing_system.py or include its code here
-from new import paraphrase_system
+# Import the required functions from the paraphrase_system module
+from agent import paraphrase_system, paraphrase_text
+
+# python benchmark.py --num_entries 250 --random_seed 42
 
 # Set up logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO,
+                    filename='benchmark_paraphrase.log',
+                    filemode='a',
+                    format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 # Load environment variables
@@ -39,619 +46,638 @@ import google.generativeai as genai
 genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
 gemini_model = genai.GenerativeModel("gemini-1.5-pro-002")
 
-# Initialize Hugging Face Inference Client for Qwen
+# Initialize Hugging Face Inference Client for LLaMA and Qwen
 from huggingface_hub import InferenceClient
 hf_api_key = os.environ.get("HF_API_KEY")
 hf_client = InferenceClient(api_token=hf_api_key)
 
 # Load the SQuAD dataset
-dataset = load_dataset("squad")  # Note: Updated to "squad" dataset for compatibility
+dataset = load_dataset("rajpurkar/squad")
+
+def check_api_keys():
+    required_keys = ["OPENAI_API_KEY", "CLAUDE_API_KEY", "COHERE_API_KEY", "GEMINI_API_KEY", "HF_API_KEY"]
+    missing_keys = [key for key in required_keys if not os.environ.get(key)]
+    if missing_keys:
+        logger.error(f"Missing API keys: {', '.join(missing_keys)}")
+        sys.exit(1)
+
+check_api_keys()
 
 def get_random_entries(num_entries, random_seed):
     dataset_size = len(dataset['train'])
+    random.seed(random_seed)
     if num_entries == 'all':
-        return dataset['train']
+        indices = list(range(dataset_size))
     else:
         num_entries = int(num_entries)
-        random.seed(random_seed)
         indices = random.sample(range(dataset_size), num_entries)
-        return dataset['train'].select(indices)
+    return indices
 
-def compare_questions_gpt4o(context: str, original_question: str, original_answer: str,
-                            paraphrased_question: str, paraphrased_answer: str) -> Dict[str, any]:
+def sanitize_text(text):
+    return text.strip()
+
+def safe_json_parse(response_text):
+    try:
+        return json.loads(response_text)
+    except json.JSONDecodeError as e:
+        logger.error(f"JSON decoding failed: {e}")
+        return None
+
+def safe_api_call(func):
+    @retry(wait=wait_exponential(min=1, max=10), stop=stop_after_attempt(3))
+    def wrapper(*args, **kwargs):
+        return func(*args, **kwargs)
+    return wrapper
+
+# Compare functions for each LLM
+
+@safe_api_call
+def compare_paraphrases_gpt4o(original_text: str, paraphrase1: str, paraphrase2: str) -> Dict[str, Any]:
     try:
         response = gpt_client.chat.completions.create(
             model="gpt-4o-2024-08-06",
             messages=[
-                {"role": "system", "content": "You are an expert in evaluating question-answer pairs based on a given context."},
-                {"role": "user", "content": f"""Compare the following two question-answer pairs based on the given context. Evaluate their quality and relevance.
+                {"role": "system", "content": "You are an expert in evaluating paraphrased texts."},
+                {"role": "user", "content": f"""You are an expert in evaluating paraphrased texts.
 
-Context: {context}
+Compare the following two paraphrases of the given original text. Evaluate their quality and relevance.
 
-Question A: {original_question}
-Answer A: {original_answer}
+Original Text: {original_text}
 
-Question B: {paraphrased_question}
-Answer B: {paraphrased_answer}
+Paraphrase 1: {paraphrase1}
 
-Evaluate both questions based on the following criteria:
-1. Structural difference from each other
-2. Semantic similarity
-3. How well the answers match each other
+Paraphrase 2: {paraphrase2}
 
-Score each question-answer pair on a scale of 0 to 10 for each criterion. Provide a detailed explanation for your evaluation, addressing each of the criteria mentioned above. Finally, determine which question (Question A or Question B) is better overall and explain why.
+Evaluate Paraphrase 1 and Paraphrase 2 based on the following criteria:
+1. Fluency
+2. Clarity
+3. Semantic preservation (how well the meaning is preserved)
+4. Coherence
+5. Grammar
+
+Score each paraphrase on a scale of 0 to 10.
 
 Provide your answer in JSON format with the following structure:
 
-{{
-    "question_a_scores": {{
-        "structural_difference": <number>,
-        "semantic_similarity": <number>,
-        "answer_match": <number>
-    }},
-    "question_b_scores": {{
-        "structural_difference": <number>,
-        "semantic_similarity": <number>,
-        "answer_match": <number>
-    }},
-    "explanation": "<string>",
-    "winner": "<string>"
-}}
+"paraphrase1_score": <number>,
+"paraphrase2_score": <number>,
+"explanation": "<string>",
+"winner": "<string>"  // Should be either "Paraphrase 1" or "Paraphrase 2", you must pick a winner, it cannot be a draw.
 
-Ensure that your response can be parsed as valid JSON."""}
+Ensure that your response can be parsed as valid JSON.
+"""}
             ],
-            temperature=0.5,
-            max_tokens=1024,
+            response_format={
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "paraphrase_comparison_evaluator",
+                    "strict": True,
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "paraphrase1_score": {"type": "number"},
+                            "paraphrase2_score": {"type": "number"},
+                            "explanation": {"type": "string"},
+                            "winner": {"type": "string", "enum": ["Paraphrase 1", "Paraphrase 2"]}
+                        },
+                        "required": ["paraphrase1_score", "paraphrase2_score", "explanation", "winner"],
+                        "additionalProperties": False
+                    }
+                }
+            }
         )
-        response_text = response.choices[0].message.content.strip()
-        parsed_response = json.loads(response_text)
+        json_response = response.choices[0].message.content
+        parsed_response = json.loads(json_response)
         return parsed_response
     except Exception as e:
-        logger.error(f"Error in comparing questions with GPT-4o: {e}")
-        return {
-            "question_a_scores": {"structural_difference": 0, "semantic_similarity": 0, "answer_match": 0},
-            "question_b_scores": {"structural_difference": 0, "semantic_similarity": 0, "answer_match": 0},
-            "explanation": "Failed to compare questions",
-            "winner": "None"
-        }
+        logger.error(f"Error in comparing paraphrases with GPT-4o: {e}")
+        return {"paraphrase1_score": 0, "paraphrase2_score": 0, "explanation": "Failed to compare paraphrases", "winner": "None"}
 
-def compare_questions_claude(context: str, original_question: str, original_answer: str,
-                             paraphrased_question: str, paraphrased_answer: str) -> Dict[str, any]:
+@safe_api_call
+def compare_paraphrases_claude(original_text: str, paraphrase1: str, paraphrase2: str) -> Dict[str, Any]:
     try:
-        prompt = f"""You are an expert in evaluating question-answer pairs based on a given context.
+        prompt = f"""You are an expert in evaluating paraphrased texts.
 
-Compare the following two question-answer pairs based on the given context. Evaluate their quality and relevance.
+Compare the following two paraphrases of the given original text. Evaluate their quality and relevance.
 
-Context: {context}
+Original Text: {original_text}
 
-Question A: {original_question}
-Answer A: {original_answer}
+Paraphrase 1: {paraphrase1}
 
-Question B: {paraphrased_question}
-Answer B: {paraphrased_answer}
+Paraphrase 2: {paraphrase2}
 
-Evaluate both questions based on the following criteria:
-1. Structural difference from each other
-2. Semantic similarity
-3. How well the answers match each other
+Evaluate Paraphrase 1 and Paraphrase 2 based on the following criteria:
+1. Fluency
+2. Clarity
+3. Semantic preservation (how well the meaning is preserved)
+4. Coherence
+5. Grammar
 
-Score each question-answer pair on a scale of 0 to 10 for each criterion. Provide a detailed explanation for your evaluation, addressing each of the criteria mentioned above. Finally, determine which question (Question A or Question B) is better overall and explain why.
+Score each paraphrase on a scale of 0 to 10.
 
 Provide your answer in JSON format with the following structure:
 
-{{
-    "question_a_scores": {{
-        "structural_difference": <number>,
-        "semantic_similarity": <number>,
-        "answer_match": <number>
-    }},
-    "question_b_scores": {{
-        "structural_difference": <number>,
-        "semantic_similarity": <number>,
-        "answer_match": <number>
-    }},
-    "explanation": "<string>",
-    "winner": "<string>"
-}}
+"paraphrase1_score": <number>,
+"paraphrase2_score": <number>,
+"explanation": "<string>",
+"winner": "<string>"  // Should be either "Paraphrase 1" or "Paraphrase 2", you must pick a winner, it cannot be a draw.
 
-Ensure that your response can be parsed as valid JSON."""
+Ensure that your response can be parsed as valid JSON.
+"""
 
         response = claude_client.completions.create(
             model="claude-3-5-sonnet-20240620",
             prompt=prompt,
             max_tokens_to_sample=1024,
-            temperature=0.5,
-            stop_sequences=[],
+            stop_sequences=[]
         )
 
-        assistant_message = response.completion.strip()
-        parsed_response = json.loads(assistant_message)
+        response_text = response.completion.strip()
+        parsed_response = safe_json_parse(response_text)
+        if parsed_response is None:
+            raise ValueError("Failed to parse JSON response")
         return parsed_response
 
     except Exception as e:
-        logger.error(f"Error in comparing questions with Claude: {e}")
+        logger.error(f"Error in comparing paraphrases with Claude: {e}")
         return {
-            "question_a_scores": {"structural_difference": 0, "semantic_similarity": 0, "answer_match": 0},
-            "question_b_scores": {"structural_difference": 0, "semantic_similarity": 0, "answer_match": 0},
-            "explanation": "Failed to compare questions",
+            "paraphrase1_score": 0,
+            "paraphrase2_score": 0,
+            "explanation": "Failed to compare paraphrases",
             "winner": "None"
         }
 
-def compare_questions_cohere(context: str, original_question: str, original_answer: str,
-                             paraphrased_question: str, paraphrased_answer: str) -> Dict[str, any]:
+@safe_api_call
+def compare_paraphrases_cohere(original_text: str, paraphrase1: str, paraphrase2: str) -> Dict[str, Any]:
     try:
-        prompt = f"""You are an expert in evaluating question-answer pairs based on a given context.
+        messages = [
+            {
+                "role": "user",
+                "content": f"""You are an expert in evaluating paraphrased texts.
 
-Compare the following two question-answer pairs based on the given context. Evaluate their quality and relevance.
+Compare the following two paraphrases of the given original text. Evaluate their quality and relevance.
 
-Context: {context}
+Original Text: {original_text}
 
-Question A: {original_question}
-Answer A: {original_answer}
+Paraphrase 1: {paraphrase1}
 
-Question B: {paraphrased_question}
-Answer B: {paraphrased_answer}
+Paraphrase 2: {paraphrase2}
 
-Evaluate both questions based on the following criteria:
-1. Structural difference from each other
-2. Semantic similarity
-3. How well the answers match each other
+Evaluate Paraphrase 1 and Paraphrase 2 based on the following criteria:
+1. Fluency
+2. Clarity
+3. Semantic preservation (how well the meaning is preserved)
+4. Coherence
+5. Grammar
 
-Score each question-answer pair on a scale of 0 to 10 for each criterion. Provide a detailed explanation for your evaluation, addressing each of the criteria mentioned above. Finally, determine which question (Question A or Question B) is better overall and explain why.
+Score each paraphrase on a scale of 0 to 10.
 
 Provide your answer in JSON format with the following structure:
 
-{{
-    "question_a_scores": {{
-        "structural_difference": <number>,
-        "semantic_similarity": <number>,
-        "answer_match": <number>
-    }},
-    "question_b_scores": {{
-        "structural_difference": <number>,
-        "semantic_similarity": <number>,
-        "answer_match": <number>
-    }},
-    "explanation": "<string>",
-    "winner": "<string>"
-}}
+"paraphrase1_score": <number>,
+"paraphrase2_score": <number>,
+"explanation": "<string>",
+"winner": "<string>"  // Should be either "Paraphrase 1" or "Paraphrase 2", you must pick a winner, it cannot be a draw.
 
-Ensure that your response can be parsed as valid JSON."""
-
+Ensure that your response can be parsed as valid JSON.
+"""
+            }
+        ]
         response = cohere_client.chat(
-            messages=[
-                {"role": "user", "content": prompt}
-            ],
-            max_tokens=1024,
-            temperature=0.5,
+            model="command-r-plus-08-2024",
+            messages=messages,
+            response_format={
+                "type": "json_object",
+                "schema": {
+                    "type": "object",
+                    "required": ["paraphrase1_score", "paraphrase2_score", "explanation", "winner"],
+                    "properties": {
+                        "paraphrase1_score": {"type": "number"},
+                        "paraphrase2_score": {"type": "number"},
+                        "explanation": {"type": "string"},
+                        "winner": {"type": "string", "enum": ["Paraphrase 1", "Paraphrase 2"]}
+                    },
+                },
+            },
         )
-
-        assistant_message = response.content.strip()
-        parsed_response = json.loads(assistant_message)
+        json_response = response.message.text.strip()
+        parsed_response = safe_json_parse(json_response)
+        if parsed_response is None:
+            raise ValueError("Failed to parse JSON response")
         return parsed_response
+
     except Exception as e:
-        logger.error(f"Error in comparing questions with Cohere: {e}")
-        return {
-            "question_a_scores": {"structural_difference": 0, "semantic_similarity": 0, "answer_match": 0},
-            "question_b_scores": {"structural_difference": 0, "semantic_similarity": 0, "answer_match": 0},
-            "explanation": "Failed to compare questions",
-            "winner": "None"
-        }
+        logger.error(f"Error in comparing paraphrases with Cohere: {e}")
+        return {"paraphrase1_score": 0, "paraphrase2_score": 0, "explanation": "Failed to compare paraphrases", "winner": "None"}
 
-def compare_questions_gemini(context: str, original_question: str, original_answer: str,
-                             paraphrased_question: str, paraphrased_answer: str) -> Dict[str, any]:
+@safe_api_call
+def compare_paraphrases_gemini(original_text: str, paraphrase1: str, paraphrase2: str) -> Dict[str, Any]:
     try:
-        prompt = f"""You are an expert in evaluating question-answer pairs based on a given context.
+        prompt = f"""You are an expert in evaluating paraphrased texts.
 
-Compare the following two question-answer pairs based on the given context. Evaluate their quality and relevance.
+Compare the following two paraphrases of the given original text. Evaluate their quality and relevance.
 
-Context: {context}
+Original Text: {original_text}
 
-Question A: {original_question}
-Answer A: {original_answer}
+Paraphrase 1: {paraphrase1}
 
-Question B: {paraphrased_question}
-Answer B: {paraphrased_answer}
+Paraphrase 2: {paraphrase2}
 
-Evaluate both questions based on the following criteria:
-1. Structural difference from each other
-2. Semantic similarity
-3. How well the answers match each other
+Evaluate Paraphrase 1 and Paraphrase 2 based on the following criteria:
+1. Fluency
+2. Clarity
+3. Semantic preservation (how well the meaning is preserved)
+4. Coherence
+5. Grammar
 
-Score each question-answer pair on a scale of 0 to 10 for each criterion. Provide a detailed explanation for your evaluation, addressing each of the criteria mentioned above. Finally, determine which question (Question A or Question B) is better overall and explain why.
+Score each paraphrase on a scale of 0 to 10.
 
 Provide your answer in JSON format with the following structure:
 
-{{
-    "question_a_scores": {{
-        "structural_difference": <number>,
-        "semantic_similarity": <number>,
-        "answer_match": <number>
-    }},
-    "question_b_scores": {{
-        "structural_difference": <number>,
-        "semantic_similarity": <number>,
-        "answer_match": <number>
-    }},
-    "explanation": "<string>",
-    "winner": "<string>"
-}}
+"paraphrase1_score": <number>,
+"paraphrase2_score": <number>,
+"explanation": "<string>",
+"winner": "<string>"  // Should be either "Paraphrase 1" or "Paraphrase 2", you must pick a winner, it cannot be a draw.
 
-Ensure that your response can be parsed as valid JSON."""
+Ensure that your response can be parsed as valid JSON.
+"""
 
-        response = genai.generate_text(
-            model="chat-bison",
+        result = gemini_model.generate_text(
             prompt=prompt,
-            temperature=0.5,
             max_output_tokens=1024,
+            temperature=0.5,
+            top_p=0.9
         )
 
-        assistant_message = response.result.strip()
-        # Extract JSON from the response
-        import re
-        json_pattern = re.compile(r'\{.*\}', re.DOTALL)
-        match = json_pattern.search(assistant_message)
-        if match:
-            json_text = match.group(0)
-            parsed_response = json.loads(json_text)
-        else:
-            raise ValueError("No JSON found in the response")
-
+        response_text = result.text.strip()
+        parsed_response = safe_json_parse(response_text)
+        if parsed_response is None:
+            raise ValueError("Failed to parse JSON response")
         return parsed_response
+
     except Exception as e:
-        logger.error(f"Error in comparing questions with Gemini: {e}")
-        return {
-            "question_a_scores": {"structural_difference": 0, "semantic_similarity": 0, "answer_match": 0},
-            "question_b_scores": {"structural_difference": 0, "semantic_similarity": 0, "answer_match": 0},
-            "explanation": "Failed to compare questions",
-            "winner": "None"
-        }
+        logger.error(f"Error in comparing paraphrases with Gemini: {e}")
+        return {"paraphrase1_score": 0, "paraphrase2_score": 0, "explanation": "Failed to compare paraphrases", "winner": "None"}
 
-def compare_questions_qwen(context: str, original_question: str, original_answer: str,
-                           paraphrased_question: str, paraphrased_answer: str) -> Dict[str, any]:
+@safe_api_call
+def compare_paraphrases_qwen(original_text: str, paraphrase1: str, paraphrase2: str) -> Dict[str, Any]:
     try:
-        prompt = f"""You are an expert in evaluating question-answer pairs based on a given context.
+        prompt = f"""You are an expert in evaluating paraphrased texts.
 
-Compare the following two question-answer pairs based on the given context. Evaluate their quality and relevance.
+Compare the following two paraphrases of the given original text. Evaluate their quality and relevance.
 
-Context: {context}
+Original Text: {original_text}
 
-Question A: {original_question}
-Answer A: {original_answer}
+Paraphrase 1: {paraphrase1}
 
-Question B: {paraphrased_question}
-Answer B: {paraphrased_answer}
+Paraphrase 2: {paraphrase2}
 
-Evaluate both questions based on the following criteria:
-1. Structural difference from each other
-2. Semantic similarity
-3. How well the answers match each other
+Evaluate Paraphrase 1 and Paraphrase 2 based on the following criteria:
+1. Fluency
+2. Clarity
+3. Semantic preservation (how well the meaning is preserved)
+4. Coherence
+5. Grammar
 
-Score each question-answer pair on a scale of 0 to 10 for each criterion. Provide a detailed explanation for your evaluation, addressing each of the criteria mentioned above. Finally, determine which question (Question A or Question B) is better overall and explain why.
+Score each paraphrase on a scale of 0 to 10.
 
 Provide your answer in JSON format with the following structure:
 
-{{
-    "question_a_scores": {{
-        "structural_difference": <number>,
-        "semantic_similarity": <number>,
-        "answer_match": <number>
-    }},
-    "question_b_scores": {{
-        "structural_difference": <number>,
-        "semantic_similarity": <number>,
-        "answer_match": <number>
-    }},
-    "explanation": "<string>",
-    "winner": "<string>"
-}}
+"paraphrase1_score": <number>,
+"paraphrase2_score": <number>,
+"explanation": "<string>",
+"winner": "<string>"  // Should be either "Paraphrase 1" or "Paraphrase 2", you must pick a winner, it cannot be a draw.
 
-Ensure that your response can be parsed as valid JSON."""
+Ensure that your response can be parsed as valid JSON.
+"""
 
         messages = [{"role": "user", "content": prompt}]
-        output = hf_client.chat_completion(
-            model="Qwen/Qwen-7B-Chat",
+        output = hf_client.chat(
+            model="Qwen/Qwen2.5-72B-Instruct",
             messages=messages,
             max_new_tokens=1024,
             temperature=0.5,
             top_p=0.9
         )
 
-        assistant_message = output["choices"][0]["message"]["content"].strip()
-        # Extract JSON from the response
-        import re
-        json_pattern = re.compile(r'\{.*\}', re.DOTALL)
-        match = json_pattern.search(assistant_message)
-        if match:
-            json_text = match.group(0)
-            parsed_response = json.loads(json_text)
-        else:
-            raise ValueError("No JSON found in the response")
-
+        response_text = output["generated_text"].strip()
+        parsed_response = safe_json_parse(response_text)
+        if parsed_response is None:
+            # Try to extract JSON content
+            import re
+            def extract_json_content(text):
+                pattern = r"\{.*\}"
+                matches = re.findall(pattern, text, re.DOTALL)
+                if matches:
+                    return matches[0]
+                else:
+                    return text.strip()
+            json_response = extract_json_content(response_text)
+            parsed_response = safe_json_parse(json_response)
+            if parsed_response is None:
+                raise ValueError("Failed to parse JSON response")
         return parsed_response
     except Exception as e:
-        logger.error(f"Error in comparing questions with Qwen: {e}")
-        return {
-            "question_a_scores": {"structural_difference": 0, "semantic_similarity": 0, "answer_match": 0},
-            "question_b_scores": {"structural_difference": 0, "semantic_similarity": 0, "answer_match": 0},
-            "explanation": "Failed to compare questions",
-            "winner": "None"
-        }
+        logger.error(f"Error in comparing paraphrases with Qwen: {e}")
+        return {"paraphrase1_score": 0, "paraphrase2_score": 0, "explanation": "Failed to compare paraphrases", "winner": "None"}
 
-def generate_answer(context: str, question: str) -> str:
+@safe_api_call
+def compare_paraphrases_llama(original_text: str, paraphrase1: str, paraphrase2: str) -> Dict[str, Any]:
     try:
-        response = gpt_client.chat.completions.create(
-            model="gpt-4o-2024-08-06",
-            messages=[
-                {"role": "system", "content": "You are a helpful assistant that answers questions based on the provided context."},
-                {"role": "user", "content": f"Context: {context}\n\nQuestion: {question}\n\nProvide a concise answer based on the context."}
-            ],
+        prompt = f"""You are an expert in evaluating paraphrased texts.
+
+Compare the following two paraphrases of the given original text. Evaluate their quality and relevance.
+
+Original Text: {original_text}
+
+Paraphrase 1: {paraphrase1}
+
+Paraphrase 2: {paraphrase2}
+
+Evaluate Paraphrase 1 and Paraphrase 2 based on the following criteria:
+1. Fluency
+2. Clarity
+3. Semantic preservation (how well the meaning is preserved)
+4. Coherence
+5. Grammar
+
+Score each paraphrase on a scale of 0 to 10.
+
+Provide your answer in JSON format with the following structure:
+
+"paraphrase1_score": <number>,
+"paraphrase2_score": <number>,
+"explanation": "<string>",
+"winner": "<string>"  // Should be either "Paraphrase 1" or "Paraphrase 2", you must pick a winner, it cannot be a draw.
+
+Ensure that your response can be parsed as valid JSON.
+"""
+
+        messages = [{"role": "user", "content": prompt}]
+        output = hf_client.chat(
+            model="meta-llama/Llama-3.1-70B-Instruct",
+            messages=messages,
+            max_new_tokens=1024,
             temperature=0.5,
-            max_tokens=150,
+            top_p=0.9
         )
-        answer = response.choices[0].message.content.strip()
-        return answer
+
+        response_text = output["generated_text"].strip()
+        parsed_response = safe_json_parse(response_text)
+        if parsed_response is None:
+            # Try to extract JSON content
+            import re
+            def extract_json_content(text):
+                pattern = r"\{.*\}"
+                matches = re.findall(pattern, text, re.DOTALL)
+                if matches:
+                    return matches[0]
+                else:
+                    return text.strip()
+            json_response = extract_json_content(response_text)
+            parsed_response = safe_json_parse(json_response)
+            if parsed_response is None:
+                raise ValueError("Failed to parse JSON response")
+        return parsed_response
     except Exception as e:
-        logger.error(f"Error generating answer: {e}")
-        return "Error generating answer"
+        logger.error(f"Error in comparing paraphrases with LLaMA: {e}")
+        return {"paraphrase1_score": 0, "paraphrase2_score": 0, "explanation": "Failed to compare paraphrases", "winner": "None"}
 
-def process_entry(entry, excel_writer, start_row):
-    result = {}  # Initialize the result dict
+# Define paraphrase_basic
 
-    # Extract data from entry
+def paraphrase_basic(input_text: str) -> str:
+    logs = []
+    generator_prompt = "You are a helpful assistant that paraphrases text while maintaining the original meaning."
+    paraphrased_text = paraphrase_text(input_text, generator_prompt, logs)
+    return paraphrased_text
+
+# Define process_entry function
+
+def process_entry(entry):
+    result = {}
+
+    # Extract the text to paraphrase
     try:
-        context = entry['context']
-        answer = entry['answers']['text'][0]
-        original_question = entry['question']
+        original_text = sanitize_text(entry['context'])
     except Exception as e:
         logger.error(f"Error extracting data from entry: {e}")
         result.update({
             'Error': 'Failed to extract data from entry',
-            'Context': None,
-            'Original Question': None,
-            'Original Answer': None,
-            'Paraphrased Question': None,
-            'Paraphrased Answer': None,
+            'Original Text': None,
+            'Basic Paraphrase': None,
+            'Agentic Paraphrase': None,
             'GPT-4o Verdict': None,
             'Claude Verdict': None,
             'Cohere Verdict': None,
             'Gemini Verdict': None,
             'Qwen Verdict': None,
+            'LLaMA Verdict': None,
             'Final Verdict': None
         })
         return result
 
-    result.update({
-        'Context': context,
-        'Original Question': original_question,
-        'Original Answer': answer
-    })
+    result['Original Text'] = original_text
 
-    # Generate paraphrased question
+    # Generate basic paraphrase
     try:
-        paraphrased_question = paraphrase_system(original_question)
+        basic_paraphrase = paraphrase_basic(original_text)
     except Exception as e:
-        logger.error(f"Error generating paraphrased question: {e}")
-        paraphrased_question = 'Error generating paraphrased question'
-    result['Paraphrased Question'] = paraphrased_question
+        logger.error(f"Error generating basic paraphrase: {e}")
+        basic_paraphrase = 'Error generating basic paraphrase'
+    result['Basic Paraphrase'] = basic_paraphrase
 
-    # Generate paraphrased answer
+    # Generate agentic paraphrase
     try:
-        paraphrased_answer = generate_answer(context, paraphrased_question)
+        agentic_paraphrase = paraphrase_system(original_text)
     except Exception as e:
-        logger.error(f"Error generating paraphrased answer: {e}")
-        paraphrased_answer = 'Error generating paraphrased answer'
-    result['Paraphrased Answer'] = paraphrased_answer
+        logger.error(f"Error generating agentic paraphrase: {e}")
+        agentic_paraphrase = 'Error generating agentic paraphrase'
+    result['Agentic Paraphrase'] = agentic_paraphrase
 
     # Initialize vote counts
-    vote_counts = {"Question A": 0, "Question B": 0}
+    vote_counts = {"Paraphrase 1": 0, "Paraphrase 2": 0}
 
     # Collect comparison results from each LLM judge
-    comparison_results = {}
 
     # GPT-4o
-    try:
-        result_gpt4o = compare_questions_gpt4o(
-            context, original_question, answer,
-            paraphrased_question, paraphrased_answer
-        )
-    except Exception as e:
-        logger.error(f"Error in GPT-4o comparison: {e}")
-        result_gpt4o = {
-            'winner': 'Error',
-            'question_a_scores': {'structural_difference': 0, 'semantic_similarity': 0, 'answer_match': 0},
-            'question_b_scores': {'structural_difference': 0, 'semantic_similarity': 0, 'answer_match': 0},
-            'explanation': 'Error in GPT-4o comparison'
-        }
+    result_gpt4o = compare_paraphrases_gpt4o(
+        original_text,
+        agentic_paraphrase,
+        basic_paraphrase
+    )
     result['GPT-4o Verdict'] = result_gpt4o.get('winner', 'Error')
     if result_gpt4o['winner'] in vote_counts:
         vote_counts[result_gpt4o['winner']] += 1
 
     # Claude
-    try:
-        result_claude = compare_questions_claude(
-            context, original_question, answer,
-            paraphrased_question, paraphrased_answer
-        )
-    except Exception as e:
-        logger.error(f"Error in Claude comparison: {e}")
-        result_claude = {
-            'winner': 'Error',
-            'question_a_scores': {'structural_difference': 0, 'semantic_similarity': 0, 'answer_match': 0},
-            'question_b_scores': {'structural_difference': 0, 'semantic_similarity': 0, 'answer_match': 0},
-            'explanation': 'Error in Claude comparison'
-        }
+    result_claude = compare_paraphrases_claude(
+        original_text,
+        agentic_paraphrase,
+        basic_paraphrase
+    )
     result['Claude Verdict'] = result_claude.get('winner', 'Error')
     if result_claude['winner'] in vote_counts:
         vote_counts[result_claude['winner']] += 1
 
     # Cohere
-    try:
-        result_cohere = compare_questions_cohere(
-            context, original_question, answer,
-            paraphrased_question, paraphrased_answer
-        )
-    except Exception as e:
-        logger.error(f"Error in Cohere comparison: {e}")
-        result_cohere = {
-            'winner': 'Error',
-            'question_a_scores': {'structural_difference': 0, 'semantic_similarity': 0, 'answer_match': 0},
-            'question_b_scores': {'structural_difference': 0, 'semantic_similarity': 0, 'answer_match': 0},
-            'explanation': 'Error in Cohere comparison'
-        }
+    result_cohere = compare_paraphrases_cohere(
+        original_text,
+        agentic_paraphrase,
+        basic_paraphrase
+    )
     result['Cohere Verdict'] = result_cohere.get('winner', 'Error')
     if result_cohere['winner'] in vote_counts:
         vote_counts[result_cohere['winner']] += 1
 
     # Gemini
-    try:
-        result_gemini = compare_questions_gemini(
-            context, original_question, answer,
-            paraphrased_question, paraphrased_answer
-        )
-    except Exception as e:
-        logger.error(f"Error in Gemini comparison: {e}")
-        result_gemini = {
-            'winner': 'Error',
-            'question_a_scores': {'structural_difference': 0, 'semantic_similarity': 0, 'answer_match': 0},
-            'question_b_scores': {'structural_difference': 0, 'semantic_similarity': 0, 'answer_match': 0},
-            'explanation': 'Error in Gemini comparison'
-        }
+    result_gemini = compare_paraphrases_gemini(
+        original_text,
+        agentic_paraphrase,
+        basic_paraphrase
+    )
     result['Gemini Verdict'] = result_gemini.get('winner', 'Error')
     if result_gemini['winner'] in vote_counts:
         vote_counts[result_gemini['winner']] += 1
 
     # Qwen
-    try:
-        result_qwen = compare_questions_qwen(
-            context, original_question, answer,
-            paraphrased_question, paraphrased_answer
-        )
-    except Exception as e:
-        logger.error(f"Error in Qwen comparison: {e}")
-        result_qwen = {
-            'winner': 'Error',
-            'question_a_scores': {'structural_difference': 0, 'semantic_similarity': 0, 'answer_match': 0},
-            'question_b_scores': {'structural_difference': 0, 'semantic_similarity': 0, 'answer_match': 0},
-            'explanation': 'Error in Qwen comparison'
-        }
+    result_qwen = compare_paraphrases_qwen(
+        original_text,
+        agentic_paraphrase,
+        basic_paraphrase
+    )
     result['Qwen Verdict'] = result_qwen.get('winner', 'Error')
     if result_qwen['winner'] in vote_counts:
         vote_counts[result_qwen['winner']] += 1
 
+    # LLaMA
+    result_llama = compare_paraphrases_llama(
+        original_text,
+        agentic_paraphrase,
+        basic_paraphrase
+    )
+    result['LLaMA Verdict'] = result_llama.get('winner', 'Error')
+    if result_llama['winner'] in vote_counts:
+        vote_counts[result_llama['winner']] += 1
+
     # Determine final verdict
     try:
-        final_verdict_key = max(vote_counts, key=vote_counts.get)
-        if vote_counts['Question A'] == vote_counts['Question B']:
-            final_verdict = 'Draw'
+        if vote_counts['Paraphrase 1'] > vote_counts['Paraphrase 2']:
+            final_verdict = 'Agentic'
+        elif vote_counts['Paraphrase 1'] < vote_counts['Paraphrase 2']:
+            final_verdict = 'Basic'
         else:
-            # Map 'Question A' to 'Original', 'Question B' to 'Paraphrased'
-            final_verdict = 'Original' if final_verdict_key == 'Question A' else 'Paraphrased'
+            final_verdict = 'Draw'
     except Exception as e:
         logger.error(f"Error determining final verdict: {e}")
         final_verdict = 'Error'
     result['Final Verdict'] = final_verdict
 
-    # Write the result to the Excel file immediately
-    df_result = pd.DataFrame([result])
-    df_result.to_excel(excel_writer, index=False, header=False, startrow=start_row)
-    excel_writer.book.save(excel_writer.path)
-    excel_writer.book = pd.ExcelWriter(excel_writer.path, engine='openpyxl').book
-
     return result
 
 def main():
-    num_entries = input("Enter the number of entries to test on (or 'all' to process the entire dataset): ")
-    random_seed = int(input("Enter a random seed (integer): "))
+    parser = argparse.ArgumentParser(description='Benchmark Paraphrase Script')
+    parser.add_argument('--num_entries', type=str, default='all', help='Number of entries to process')
+    parser.add_argument('--random_seed', type=int, default=42, help='Random seed')
+    parser.add_argument('--entries_file', type=str, default='benchmark_paraphrase_results.csv', help='CSV file to store results')
+    args = parser.parse_args()
 
-    entries = get_random_entries(num_entries, random_seed)
-    results = []
+    # Generate the indices based on the random seed and num_entries
+    indices = get_random_entries(args.num_entries, args.random_seed)
+    total_entries = len(indices)
+
+    # Read processed indices from existing entries file
+    processed_indices = set()
+    if os.path.exists(args.entries_file) and os.stat(args.entries_file).st_size > 0:
+        df_existing = pd.read_csv(args.entries_file)
+        if 'Index' in df_existing.columns:
+            processed_indices = set(df_existing['Index'].tolist())
+
+    # Determine which indices have not been processed yet
+    indices_to_process = [idx for idx in indices if idx not in processed_indices]
+    if not indices_to_process:
+        print("All entries have been processed. Exiting.")
+        return
+
+    print(f"Total entries to process: {len(indices_to_process)} out of {total_entries}")
+
+    # Select the entries to process
+    entries_to_process = dataset['train'].select(indices_to_process)
     total_vote_counts = Counter()
 
-    # Prepare the Excel file and writer
-    excel_filename = 'benchmark_results.xlsx'
+    fieldnames = ['Index', 'Original Text', 'Basic Paraphrase', 'Agentic Paraphrase',
+                  'GPT-4o Verdict', 'Claude Verdict', 'Cohere Verdict',
+                  'Gemini Verdict', 'Qwen Verdict', 'LLaMA Verdict','Final Verdict']
 
-    # Check if the Excel file already exists
-    if os.path.exists(excel_filename):
-        df_existing = pd.read_excel(excel_filename)
-        start_row = len(df_existing) + 1
-    else:
-        df_existing = pd.DataFrame()
-        start_row = 0
+    # Open the CSV file for appending
+    with open(args.entries_file, 'a', newline='', encoding='utf-8') as csvfile:
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
 
-    excel_writer = pd.ExcelWriter(excel_filename, engine='openpyxl', mode='a' if os.path.exists(excel_filename) else 'w')
+        # Write header if file is empty
+        if os.stat(args.entries_file).st_size == 0:
+            writer.writeheader()
 
-    # If the file exists and we're appending, ensure we have the workbook loaded
-    if os.path.exists(excel_filename):
-        from openpyxl import load_workbook
-        excel_writer.book = load_workbook(excel_filename)
-        excel_writer.sheets = {ws.title: ws for ws in excel_writer.book.worksheets}
+        # Progress bar
+        for idx_in_entries, (entry, idx_in_dataset) in enumerate(
+            tqdm(zip(entries_to_process, indices_to_process), total=len(indices_to_process), desc='Processing entries')
+        ):
+            print(f"Processing entry {idx_in_entries + 1}/{len(indices_to_process)} (Dataset Index: {idx_in_dataset})...")
+            try:
+                result = process_entry(entry)
+                result['Index'] = idx_in_dataset  # Add the index to the result
+                # Write result to CSV
+                writer.writerow(result)
+                csvfile.flush()
+                os.fsync(csvfile.fileno())
+                # Update total vote counts
+                for key in ['Paraphrase 1', 'Paraphrase 2']:
+                    total_votes = sum(
+                        1 for verdict in [
+                            result.get('GPT-4o Verdict'),
+                            result.get('Claude Verdict'),
+                            result.get('Cohere Verdict'),
+                            result.get('Gemini Verdict'),
+                            result.get('Qwen Verdict'),
+                            result.get('LLaMA Verdict')
+                        ] if verdict == key
+                    )
+                    total_vote_counts[key] += total_votes
+            except Exception as e:
+                logger.error(f"Error processing entry {idx_in_dataset}: {e}")
+                continue
 
-    # If starting fresh, write headers
-    if start_row == 0:
-        df_headers = pd.DataFrame(columns=[
-            'Context', 'Original Question', 'Original Answer',
-            'Paraphrased Question', 'Paraphrased Answer',
-            'GPT-4o Verdict', 'Claude Verdict', 'Cohere Verdict', 'Gemini Verdict', 'Qwen Verdict',
-            'Final Verdict'
-        ])
-        df_headers.to_excel(excel_writer, index=False)
-        excel_writer.book.save(excel_writer.path)
-        excel_writer.book = pd.ExcelWriter(excel_writer.path, engine='openpyxl').book
-        start_row = 1  # Adjust for header row
-
-    for idx_in_entries, entry in enumerate(entries):
-        idx_in_dataset = idx_in_entries  # Since entries are random, index in dataset is not sequential
-        print(f"Processing entry {idx_in_entries+1}/{len(entries)}...")
-        try:
-            result = process_entry(entry, excel_writer, start_row + idx_in_entries)
-            results.append(result)
-            # Update total vote counts
-            for key in ['Question A', 'Question B']:
-                total_votes = sum(
-                    1 for verdict in [
-                        result.get('GPT-4o Verdict'),
-                        result.get('Claude Verdict'),
-                        result.get('Cohere Verdict'),
-                        result.get('Gemini Verdict'),
-                        result.get('Qwen Verdict')
-                    ] if verdict == key
-                )
-                total_vote_counts[key] += total_votes
-        except Exception as e:
-            logger.error(f"Error processing entry {idx_in_dataset}: {e}")
-            continue
+    # Read the CSV file into a DataFrame for summary
+    df = pd.read_csv(args.entries_file)
 
     # Generate summary
-    total_entries = len(results)
-    df = pd.DataFrame(results)
+    total_entries_processed = len(df)
     final_verdicts = df['Final Verdict'].value_counts()
-    percentage_original = (final_verdicts.get('Original', 0) / total_entries) * 100 if total_entries > 0 else 0
-    percentage_paraphrased = (final_verdicts.get('Paraphrased', 0) / total_entries) * 100 if total_entries > 0 else 0
-    percentage_draw = (final_verdicts.get('Draw', 0) / total_entries) * 100 if total_entries > 0 else 0
+    percentage_basic = (final_verdicts.get('Basic', 0) / total_entries_processed) * 100 if total_entries_processed > 0 else 0
+    percentage_agentic = (final_verdicts.get('Agentic', 0) / total_entries_processed) * 100 if total_entries_processed > 0 else 0
+    percentage_draw = (final_verdicts.get('Draw', 0) / total_entries_processed) * 100 if total_entries_processed > 0 else 0
 
     summary = f"""
-Total Entries Processed: {total_entries}
+Total Entries Processed: {total_entries_processed}
 
 Vote Counts:
-Question A (Original) Votes: {total_vote_counts['Question A']}
-Question B (Paraphrased) Votes: {total_vote_counts['Question B']}
+Paraphrase 1 (Agentic) Votes: {total_vote_counts['Paraphrase 1']}
+Paraphrase 2 (Basic) Votes: {total_vote_counts['Paraphrase 2']}
 
 Final Verdicts:
-Original Question Wins: {final_verdicts.get('Original', 0)} ({percentage_original:.2f}%)
-Paraphrased Question Wins: {final_verdicts.get('Paraphrased', 0)} ({percentage_paraphrased:.2f}%)
+Agentic Paraphrase Wins: {final_verdicts.get('Agentic', 0)} ({percentage_agentic:.2f}%)
+Basic Paraphrase Wins: {final_verdicts.get('Basic', 0)} ({percentage_basic:.2f}%)
 Draws: {final_verdicts.get('Draw', 0)} ({percentage_draw:.2f}%)
 """
 
     # Save summary to text file
-    summary_filename = 'benchmark_summary.txt'
+    summary_filename = 'benchmark_paraphrase_summary.txt'
     with open(summary_filename, 'w') as f:
         f.write(summary)
     print(f"Summary saved to {summary_filename}")
     print(summary)
 
-    # Close the Excel writer
-    excel_writer.close()
-
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        logger.info("Script interrupted by user.")
+        sys.exit(0)
