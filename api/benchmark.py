@@ -39,7 +39,7 @@ claude_client = anthropic.Anthropic(api_key=os.environ.get("CLAUDE_API_KEY"))
 
 # Initialize Cohere client
 import cohere
-cohere_client = cohere.ClientV2(api_key=os.environ.get("COHERE_API_KEY"), log_warning_experimental_features=False)
+cohere_client = cohere.ClientV2(api_key=os.environ.get("COHERE_API_KEY_PAID"), log_warning_experimental_features=False)
 
 # Initialize Google Generative AI client for Gemini
 import google.generativeai as genai
@@ -55,7 +55,7 @@ hf_client = InferenceClient(api_key=hf_api_key)
 dataset = load_dataset("rajpurkar/squad")
 
 def check_api_keys():
-    required_keys = ["OPENAI_API_KEY", "CLAUDE_API_KEY", "COHERE_API_KEY", "GEMINI_API_KEY", "HF_API_KEY"]
+    required_keys = ["OPENAI_API_KEY", "CLAUDE_API_KEY", "COHERE_API_KEY_PAID", "GEMINI_API_KEY", "HF_API_KEY"]
     missing_keys = [key for key in required_keys if not os.environ.get(key)]
     if missing_keys:
         logger.error(f"Missing API keys: {', '.join(missing_keys)}")
