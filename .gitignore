@@ -1,6 +1,8 @@
 # Code outputs
 *.txt
 *.png
+*.csv
+*.json
 
 # Environment Variables
 .env
