@@ -9,6 +9,10 @@ load_dotenv()
 # Initialize OpenAI client
 client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
+# Initialize Anthropics client for Claude
+import anthropic
+claude_client = anthropic.Anthropic(api_key=os.environ.get("CLAUDE_API_KEY"))
+
 # Set up logging to save to a JSON file
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -81,35 +85,48 @@ def evaluate_texts(text1: str, text2: str, eval_history: list, criteria_weights:
     """
     try:
         # Prepare the messages with the conversation history
-        messages = eval_history.copy()
-        messages.append({"role": "system", "content": "You are an evaluator that compares two texts blindly and chooses the better one based on the given criteria."})
-        messages.append({"role": "user", "content": f"Compare the following two texts:\n\nText A:\n{text1}\n\nText B:\n{text2}\n\nCriteria weights:\n{json.dumps(criteria_weights)}\n\nProvide your evaluation and choose the better text. Always choose one as better and provide detailed reasoning."})
-
-        response = client.chat.completions.create(
-            model="gpt-4o-2024-08-06",
-            messages=messages,
-            response_format={
-                "type": "json_schema",
-                "json_schema": {
-                    "name": "text_evaluator",
-                    "strict": True,
-                    "schema": {
-                        "type": "object",
-                        "properties": {
-                            "better_text": {"type": "string", "enum": ["Text A", "Text B"]},
-                            "reasoning": {"type": "string"}
-                        },
-                        "required": ["better_text", "reasoning"],
-                        "additionalProperties": False
-                    }
-                }
+        
+        # Define the tool (function) with the expected output schema
+        tool = {
+            "name": "text_evaluator",
+            "description": "Evaluate and compare two generated paraphrases and output the result in structured JSON.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "better_text": {"type": "string", "enum": ["Text A", "Text B"]},
+                    "reasoning": {"type": "string"}
+                },
+                "required": ["better_text", "reasoning"],
+                "additionalProperties": False
             }
+        }
+
+        messages = eval_history.copy()
+        messages.append({
+            "role": "user", 
+            "content": "You are an evaluator that compares two texts blindly and chooses the better one based on the given criteria."
+        })
+        messages.append({
+            "role": "user", 
+            "content": f"Compare the following two texts:\n\nText A:\n{text1}\n\nText B:\n{text2}\n\nCriteria weights:\n{json.dumps(criteria_weights)}\n\nProvide your evaluation and choose the better text. Always choose one as better and provide detailed reasoning."
+        })
+        
+        response = claude_client.messages.create(
+            model="claude-3-5-sonnet-20240620",
+            messages=messages,
+            max_tokens=1024,
+            temperature=0.1,
+            tools=[tool],
+            tool_choice={"type": "tool", "name": "text_evaluator"}
         )
-        json_response = response.choices[0].message.content
-        parsed_response = json.loads(json_response)
+
+        # The response.content[0].input is already a dictionary, no need to parse it
+        parsed_response = response.content[0].input
+
         # Append the latest messages to the eval_history
-        messages.append({"role": "assistant", "content": json_response})
+        messages.append({"role": "assistant", "content": json.dumps(parsed_response)})  # Convert dict to JSON string for history
         eval_history.extend(messages[-2:])
+
         # Log the event
         log_event("evaluator", {
             "text_a": text1,
@@ -118,11 +135,13 @@ def evaluate_texts(text1: str, text2: str, eval_history: list, criteria_weights:
             "better_text": parsed_response["better_text"],
             "reasoning": parsed_response["reasoning"]
         }, logs)
+
         return {
             "better_text": parsed_response["better_text"],
             "reasoning": parsed_response["reasoning"],
             "eval_history": eval_history
         }
+
     except Exception as e:
         logger.error(f"Error in evaluate_texts: {e}")
         return None
