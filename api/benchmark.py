@@ -29,9 +29,9 @@ logger = logging.getLogger(__name__)
 # Load environment variables
 load_dotenv()
 
-# Initialize OpenAI client for GPT-4o
-from openai import OpenAI
-gpt_client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+# # Initialize OpenAI client for GPT-4o
+# from openai import OpenAI
+# gpt_client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
 # Initialize Anthropics client for Claude
 import anthropic
@@ -92,70 +92,70 @@ def safe_api_call(func):
 
 # Modify compare functions to include retries and keep API calls consistent with the initial code
 
-@safe_api_call
-def compare_questions_gpt4o(context: str, original_question: str, original_answer: str,
-                            basic_question: str, basic_answer: str,
-                            enhanced_question: str, enhanced_answer: str) -> Dict[str, Any]:
-    try:
-        response = gpt_client.chat.completions.create(
-            model="gpt-4o-2024-08-06",
-            messages=[
-                {"role": "system", "content": "You are an expert in evaluating question-answer pairs based on a given context."},
-                {"role": "user", "content": f"""You are an expert in evaluating question-answer pairs based on a given context.
+# @safe_api_call
+# def compare_questions_gpt4o(context: str, original_question: str, original_answer: str,
+#                             basic_question: str, basic_answer: str,
+#                             enhanced_question: str, enhanced_answer: str) -> Dict[str, Any]:
+#     try:
+#         response = gpt_client.chat.completions.create(
+#             model="gpt-4o-2024-08-06",
+#             messages=[
+#                 {"role": "system", "content": "You are an expert in evaluating question-answer pairs based on a given context."},
+#                 {"role": "user", "content": f"""You are an expert in evaluating question-answer pairs based on a given context.
 
-Compare the following two generated question-answer pairs based on the given context and the original question-answer pair. Evaluate their quality and relevance.
+# Compare the following two generated question-answer pairs based on the given context and the original question-answer pair. Evaluate their quality and relevance.
 
-Context: {context}
+# Context: {context}
 
-Original Question: {original_question}
-Original Answer: {original_answer}
+# Original Question: {original_question}
+# Original Answer: {original_answer}
 
-Question 1: {enhanced_question}
-Answer 1: {enhanced_answer}
+# Question 1: {enhanced_question}
+# Answer 1: {enhanced_answer}
 
-Question 2: {basic_question}
-Answer 2: {basic_answer}
+# Question 2: {basic_question}
+# Answer 2: {basic_answer}
 
-Evaluate Question 1 and Question 2 based on the following criteria:
-1. Structural difference from the original question
-2. Semantic similarity to the original question
-3. How well the generated answer matches the original answer
+# Evaluate Question 1 and Question 2 based on the following criteria:
+# 1. Structural difference from the original question
+# 2. Semantic similarity to the original question
+# 3. How well the generated answer matches the original answer
 
-Score each question-answer pair on a scale of 0 to 10.
+# Score each question-answer pair on a scale of 0 to 10.
 
-Provide your answer in JSON format with the following structure:
+# Provide your answer in JSON format with the following structure:
 
-"question1_score": <number>,
-"question2_score": <number>,
-"explanation": "<string>",
-"winner": "<string>"  // Should be either "Question 1" or "Question 2", you must pick a winner, it cannot be a draw.
+# "question1_score": <number>,
+# "question2_score": <number>,
+# "explanation": "<string>",
+# "winner": "<string>"  // Should be either "Question 1" or "Question 2", you must pick a winner, it cannot be a draw.
 
-Ensure that your response can be parsed as valid JSON.
-"""}
-            ],
-            response_format={
-                "type": "json_schema",
-                "json_schema": {
-                    "name": "question_comparison_evaluator",
-                    "strict": True,
-                    "schema": {
-                        "type": "object",
-                        "properties": {
-                            "question1_score": {"type": "number"},
-                            "question2_score": {"type": "number"},
-                            "explanation": {"type": "string"},
-                            "winner": {"type": "string", "enum": ["Question 1", "Question 2"]}
-                        },
-                        "required": ["question1_score", "question2_score", "explanation", "winner"],
-                        "additionalProperties": False
-                    }
-                }
-            }
-        )
-        return json.loads(response.choices[0].message.content)
-    except Exception as e:
-        logger.error(f"Error in comparing questions with GPT-4o: {e}")
-        return {"question1_score": 0, "question2_score": 0, "explanation": "Failed to compare questions", "winner": "None"}
+# Ensure that your response can be parsed as valid JSON.
+# """}
+#             ],
+#             response_format={
+#                 "type": "json_schema",
+#                 "json_schema": {
+#                     "name": "question_comparison_evaluator",
+#                     "strict": True,
+#                     "schema": {
+#                         "type": "object",
+#                         "properties": {
+#                             "question1_score": {"type": "number"},
+#                             "question2_score": {"type": "number"},
+#                             "explanation": {"type": "string"},
+#                             "winner": {"type": "string", "enum": ["Question 1", "Question 2"]}
+#                         },
+#                         "required": ["question1_score", "question2_score", "explanation", "winner"],
+#                         "additionalProperties": False
+#                     }
+#                 }
+#             }
+#         )
+#         return json.loads(response.choices[0].message.content)
+#     except Exception as e:
+#         logger.error(f"Error in comparing questions with GPT-4o: {e}")
+#         return {"question1_score": 0, "question2_score": 0, "explanation": "Failed to compare questions", "winner": "None"}
 
 @safe_api_call
 def compare_questions_claude(context: str, original_question: str, original_answer: str,
@@ -221,6 +221,7 @@ Ensure that your response can be parsed as valid JSON.
         response = claude_client.messages.create(
             model="claude-3-5-sonnet-20240620",
             max_tokens=1024,
+            temperature=0.1,
             tools=[tool],
             tool_choice={"type": "tool", "name": "question_comparison_evaluator"},
             messages=messages
@@ -244,6 +245,7 @@ def compare_questions_cohere(context: str, original_question: str, original_answ
     try:
         res = cohere_client.chat(
             model="command-r-plus-08-2024",
+            temperature=0.1,
             messages=[
                 {
                     "role": "user",
@@ -357,7 +359,8 @@ Ensure that your response can be parsed as valid JSON.
             prompt,
             generation_config=genai.GenerationConfig(
                 response_mime_type="application/json",
-                response_schema=ComparisonResult
+                response_schema=ComparisonResult,
+                temperature=0.1
             ),
         )
         json_response = result.text.strip()
@@ -417,7 +420,7 @@ Ensure that your response can be parsed as valid JSON.
         output = hf_client.chat.completions.create(
             model="Qwen/Qwen2.5-72B-Instruct",
             messages=messages,
-            temperature=0.5,
+            temperature=0.2,
             max_tokens=1024,
             top_p=0.7
         )
@@ -483,7 +486,7 @@ Ensure that your response can be parsed as valid JSON.
         output = hf_client.chat.completions.create(
             model="meta-llama/Llama-3.1-70B-Instruct",
             messages=messages,
-            temperature=0.5,
+            temperature=0.2,
             max_tokens=1024,
             top_p=0.7
         )
@@ -527,7 +530,6 @@ def process_entry(entry):
             'Basic Answer': None,
             'Enhanced Question': None,
             'Enhanced Answer': None,
-            'GPT-4o Verdict': None,
             'Claude Verdict': None,
             'Cohere Verdict': None,
             'Gemini Verdict': None,
@@ -581,15 +583,15 @@ def process_entry(entry):
     # Collect comparison results from each LLM judge
     comparison_results = {}
 
-    # GPT-4o
-    result_gpt4o = compare_questions_gpt4o(
-        context, original_question, answer,
-        basic_question, basic_answer,
-        enhanced_question, enhanced_answer
-    )
-    result['GPT-4o Verdict'] = result_gpt4o.get('winner', 'Error')
-    if result_gpt4o['winner'] in vote_counts:
-        vote_counts[result_gpt4o['winner']] += 1
+    # # GPT-4o
+    # result_gpt4o = compare_questions_gpt4o(
+    #     context, original_question, answer,
+    #     basic_question, basic_answer,
+    #     enhanced_question, enhanced_answer
+    # )
+    # result['GPT-4o Verdict'] = result_gpt4o.get('winner', 'Error')
+    # if result_gpt4o['winner'] in vote_counts:
+    #     vote_counts[result_gpt4o['winner']] += 1
 
     # Claude
     result_claude = compare_questions_claude(
@@ -687,7 +689,7 @@ def main():
     total_vote_counts = Counter()
 
     fieldnames = ['Index', 'Context', 'Original Question', 'Original Answer', 'Basic Question', 'Basic Answer',
-                  'Enhanced Question', 'Enhanced Answer', 'GPT-4o Verdict', 'Claude Verdict', 'Cohere Verdict',
+                  'Enhanced Question', 'Enhanced Answer', 'Claude Verdict', 'Cohere Verdict',
                   'Gemini Verdict', 'Qwen Verdict', 'LLaMA Verdict','Final Verdict']
 
     # Open the CSV file for appending
@@ -714,7 +716,6 @@ def main():
                 for key in ['Question 1', 'Question 2']:
                     total_votes = sum(
                         1 for verdict in [
-                            result.get('GPT-4o Verdict'),
                             result.get('Claude Verdict'),
                             result.get('Cohere Verdict'),
                             result.get('Gemini Verdict'),
