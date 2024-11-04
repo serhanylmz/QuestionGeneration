@@ -13,10 +13,17 @@ load_dotenv()
 # Initialize OpenAI client
 client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
+generation_temperature = 0.8
+judge_temperature = 0.2
+
+# initial (default) temperature was set to 1.0, but it was changed to 0.8 to reduce randomness in the generated questions
+# the judge temperature was set to 0.2 to ensure we have reliable and rather deterministic judges.
+
 def generate_basic_question(context: str, answer: str, initial_question: str) -> str:
     try:
         response = client.chat.completions.create(
             model="gpt-4o-2024-08-06",
+            temperature=generation_temperature,
             messages=[
                 {"role": "system", "content": "You are a helpful assistant that generates diverse questions based on given context, answer, and initial question."},
                 {"role": "user", "content": f"Based on this context: '{context}', answer: '{answer}', and initial question: '{initial_question}', generate a new question that is semantically similar but structurally different from the initial question. The new question should still lead to the same answer when asked about the context. Provide only the question, without any additional text."}
@@ -49,6 +56,7 @@ def generate_single_question(context: str, answer: str, initial_question: str, e
         existing_questions_str = "\n".join(existing_questions)
         response = client.chat.completions.create(
             model="gpt-4o-2024-08-06",
+            temperature=generation_temperature,
             messages=[
                 {"role": "system", "content": "You are a helpful assistant that generates diverse questions based on given context, answer, and initial question."},
                 {"role": "user", "content": f"Based on this context: '{context}', answer: '{answer}', and initial question: '{initial_question}', generate a new question that is semantically similar but structurally different from the initial question. The new question should still lead to the same answer when asked about the context. The question should also be distinct from these existing questions:\n{existing_questions_str}\n\nProvide only the new question, without any additional text."}
@@ -103,6 +111,7 @@ def generate_answer(context: str, question: str) -> str:
     try:
         response = client.chat.completions.create(
             model="gpt-4o-2024-08-06",
+            temperature=judge_temperature,
             messages=[
                 {"role": "system", "content": "You are a precise answer generator. Your task is to provide concise, accurate answers based on the given context. Focus on the key information that directly answers the question, even if the phrasing differs from the context."},
                 {"role": "user", "content": f"""Context: {context}
@@ -144,6 +153,7 @@ def calculate_semantic_similarity(questions: List[str], initial_question: str) -
     try:
         response = client.chat.completions.create(
             model="gpt-4o-2024-08-06",
+            temperature=judge_temperature,
             messages=[
                 {"role": "system", "content": "You are an expert in semantic analysis, specializing in evaluating the similarity of questions."},
                 {"role": "user", "content": f"Analyze the semantic similarity of the following questions to the initial question. Provide a similarity score for each question on a scale of 0 to 1, where 1 is highly similar to the initial question:\n\nInitial question: {initial_question}\n\nQuestions to analyze: {json.dumps(questions)}"}
@@ -188,6 +198,7 @@ def check_answer_precision(context: str, questions: List[str], original_answer: 
         try:
             response = client.chat.completions.create(
                 model="gpt-4o-2024-08-06",
+                temperature=judge_temperature,
                 messages=[
                     {"role": "system", "content": "You are an expert in evaluating answer precision, focusing on semantic similarity rather than exact wording. Your task is to determine if two answers convey the same core information, even if they are phrased differently."},
                     {"role": "user", "content": f"""Context: {context}
