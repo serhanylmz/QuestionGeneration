@@ -111,7 +111,7 @@ def generate_answer(context: str, question: str) -> str:
     try:
         response = client.chat.completions.create(
             model="gpt-4o-2024-08-06",
-            temperature=judge_temperature,
+            temperature=0, # might work out better with 0 temperature, as this just needs to be a direct answer
             messages=[
                 {"role": "system", "content": "You are a precise answer generator. Your task is to provide concise, accurate answers based on the given context. Focus on the key information that directly answers the question, even if the phrasing differs from the context."},
                 {"role": "user", "content": f"""Context: {context}
