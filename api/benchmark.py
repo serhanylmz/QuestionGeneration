@@ -29,10 +29,6 @@ logger = logging.getLogger(__name__)
 # Load environment variables
 load_dotenv()
 
-# # Initialize OpenAI client for GPT-4o
-# from openai import OpenAI
-# gpt_client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
-
 # Initialize Anthropics client for Claude
 import anthropic
 claude_client = anthropic.Anthropic(api_key=os.environ.get("CLAUDE_API_KEY"))
@@ -90,72 +86,54 @@ def safe_api_call(func):
         return func(*args, **kwargs)
     return wrapper
 
+PROMPT_TEMPLATE = '''You are an expert judge evaluating the quality of paraphrased questions based on a given context and original question-answer pair. Evaluate their quality and relevance.
+
+Context:
+{context}
+
+Original Question: {original_question}
+Original Answer: {original_answer}
+
+Question 1: {enhanced_question}
+Answer 1: {enhanced_answer}
+
+Question 2: {basic_question}
+Answer 2: {basic_answer}
+
+Evaluate Question 1 and Question 2 based on the following criteria:
+1. Structural difference from the original question - the question should use different wording and structure while maintaining the core intent
+2. Semantic similarity to the original question - despite structural changes, it should preserve the original meaning and seek the same information
+3. How well the generated answer aligns with the original answer - answers should capture the same key information
+
+Think about this step by step:
+
+Begin by analyzing the original question to understand its core intent and information being sought. Use this as the reference point for evaluation.
+
+For Question 1:
+Structural difference score (out of 10): Analyze how different its structure is from the original question.
+Semantic preservation score (out of 10): Evaluate how well it maintains the original meaning.
+Answer alignment score (out of 10): Compare its answer with the original answer for information overlap.
+Consider these aspects to determine a final score out of 10.
+
+For Question 2:
+Structural difference score (out of 10): Analyze structural uniqueness from the original.
+Semantic preservation score (out of 10): Evaluate meaning preservation.
+Answer alignment score (out of 10): Compare answer alignment with original.
+Consider these aspects to determine a final score out of 10.
+
+Compare both questions' scores, considering how well each balances structural novelty with meaning preservation and answer accuracy.
+
+Based on this analysis, provide your answer in JSON format with the following structure:
+
+"question1_score": <number>,
+"question2_score": <number>,
+"explanation": "<string>",
+"winner": "<string>"  // Should be either "Question 1" or "Question 2"
+
+Your response must be a valid JSON object following this exact template. You must pick a winner; it cannot be a draw.
+'''
+
 # Modify compare functions to include retries and keep API calls consistent with the initial code
-
-# @safe_api_call
-# def compare_questions_gpt4o(context: str, original_question: str, original_answer: str,
-#                             basic_question: str, basic_answer: str,
-#                             enhanced_question: str, enhanced_answer: str) -> Dict[str, Any]:
-#     try:
-#         response = gpt_client.chat.completions.create(
-#             model="gpt-4o-2024-08-06",
-#             messages=[
-#                 {"role": "system", "content": "You are an expert in evaluating question-answer pairs based on a given context."},
-#                 {"role": "user", "content": f"""You are an expert in evaluating question-answer pairs based on a given context.
-
-# Compare the following two generated question-answer pairs based on the given context and the original question-answer pair. Evaluate their quality and relevance.
-
-# Context: {context}
-
-# Original Question: {original_question}
-# Original Answer: {original_answer}
-
-# Question 1: {enhanced_question}
-# Answer 1: {enhanced_answer}
-
-# Question 2: {basic_question}
-# Answer 2: {basic_answer}
-
-# Evaluate Question 1 and Question 2 based on the following criteria:
-# 1. Structural difference from the original question
-# 2. Semantic similarity to the original question
-# 3. How well the generated answer matches the original answer
-
-# Score each question-answer pair on a scale of 0 to 10.
-
-# Provide your answer in JSON format with the following structure:
-
-# "question1_score": <number>,
-# "question2_score": <number>,
-# "explanation": "<string>",
-# "winner": "<string>"  // Should be either "Question 1" or "Question 2", you must pick a winner, it cannot be a draw.
-
-# Ensure that your response can be parsed as valid JSON.
-# """}
-#             ],
-#             response_format={
-#                 "type": "json_schema",
-#                 "json_schema": {
-#                     "name": "question_comparison_evaluator",
-#                     "strict": True,
-#                     "schema": {
-#                         "type": "object",
-#                         "properties": {
-#                             "question1_score": {"type": "number"},
-#                             "question2_score": {"type": "number"},
-#                             "explanation": {"type": "string"},
-#                             "winner": {"type": "string", "enum": ["Question 1", "Question 2"]}
-#                         },
-#                         "required": ["question1_score", "question2_score", "explanation", "winner"],
-#                         "additionalProperties": False
-#                     }
-#                 }
-#             }
-#         )
-#         return json.loads(response.choices[0].message.content)
-#     except Exception as e:
-#         logger.error(f"Error in comparing questions with GPT-4o: {e}")
-#         return {"question1_score": 0, "question2_score": 0, "explanation": "Failed to compare questions", "winner": "None"}
 
 @safe_api_call
 def compare_questions_claude(context: str, original_question: str, original_answer: str,
@@ -183,37 +161,9 @@ def compare_questions_claude(context: str, original_question: str, original_answ
         messages = [
             {
                 "role": "user",
-                "content": f"""You are an expert in evaluating question-answer pairs based on a given context.
-
-Compare the following two generated question-answer pairs based on the given context and the original question-answer pair. Evaluate their quality and relevance.
-
-Context: {context}
-
-Original Question: {original_question}
-Original Answer: {original_answer}
-
-Question 1: {enhanced_question}
-Answer 1: {enhanced_answer}
-
-Question 2: {basic_question}
-Answer 2: {basic_answer}
-
-Evaluate Question 1 and Question 2 based on the following criteria:
-1. Structural difference from the original question
-2. Semantic similarity to the original question
-3. How well the generated answer matches the original answer
-
-Score each question-answer pair on a scale of 0 to 10.
-
-Provide your answer in JSON format with the following structure:
-
-"question1_score": <number>,
-"question2_score": <number>,
-"explanation": "<string>",
-"winner": "<string>"  // Should be either "Question 1" or "Question 2", you must pick a winner, it cannot be a draw.
-
-Ensure that your response can be parsed as valid JSON.
-"""
+                "content": PROMPT_TEMPLATE.format(context=context, original_question=original_question, 
+                                                  original_answer=original_answer, enhanced_question=enhanced_question, 
+                                                  enhanced_answer=enhanced_answer, basic_question=basic_question, basic_answer=basic_answer)
             }
         ]
 
@@ -249,37 +199,9 @@ def compare_questions_cohere(context: str, original_question: str, original_answ
             messages=[
                 {
                     "role": "user",
-                    "content": f"""You are an expert in evaluating question-answer pairs based on a given context.
-
-Compare the following two generated question-answer pairs based on the given context and the original question-answer pair. Evaluate their quality and relevance.
-
-Context: {context}
-
-Original Question: {original_question}
-Original Answer: {original_answer}
-
-Question 1: {enhanced_question}
-Answer 1: {enhanced_answer}
-
-Question 2: {basic_question}
-Answer 2: {basic_answer}
-
-Evaluate Question 1 and Question 2 based on the following criteria:
-1. Structural difference from the original question
-2. Semantic similarity to the original question
-3. How well the generated answer matches the original answer
-
-Score each question-answer pair on a scale of 0 to 10.
-
-Provide your answer in JSON format with the following structure:
-
-"question1_score": <number>,
-"question2_score": <number>,
-"explanation": "<string>",
-"winner": "<string>"  // Should be either "Question 1" or "Question 2", you must pick a winner, it cannot be a draw.
-
-Ensure that your response can be parsed as valid JSON.
-"""
+                    "content": PROMPT_TEMPLATE.format(context=context, original_question=original_question, 
+                                                  original_answer=original_answer, enhanced_question=enhanced_question, 
+                                                  enhanced_answer=enhanced_answer, basic_question=basic_question, basic_answer=basic_answer)
                 }
             ],
             response_format={
@@ -323,37 +245,9 @@ def compare_questions_gemini(context: str, original_question: str, original_answ
                              basic_question: str, basic_answer: str,
                              enhanced_question: str, enhanced_answer: str) -> Dict[str, Any]:
     try:
-        prompt = f"""You are an expert in evaluating question-answer pairs based on a given context.
-
-Compare the following two generated question-answer pairs based on the given context and the original question-answer pair. Evaluate their quality and relevance.
-
-Context: {context}
-
-Original Question: {original_question}
-Original Answer: {original_answer}
-
-Question 1: {enhanced_question}
-Answer 1: {enhanced_answer}
-
-Question 2: {basic_question}
-Answer 2: {basic_answer}
-
-Evaluate Question 1 and Question 2 based on the following criteria:
-1. Structural difference from the original question
-2. Semantic similarity to the original question
-3. How well the generated answer matches the original answer
-
-Score each question-answer pair on a scale of 0 to 10.
-
-Provide your answer in JSON format with the following structure:
-
-"question1_score": <number>,
-"question2_score": <number>,
-"explanation": "<string>",
-"winner": "<string>"  // Should be either "Question 1" or "Question 2", you must pick a winner, it cannot be a draw.
-
-Ensure that your response can be parsed as valid JSON.
-"""
+        prompt = PROMPT_TEMPLATE.format(context=context, original_question=original_question, 
+                                                  original_answer=original_answer, enhanced_question=enhanced_question, 
+                                                  enhanced_answer=enhanced_answer, basic_question=basic_question, basic_answer=basic_answer)
 
         result = gemini_model.generate_content(
             prompt,
@@ -384,37 +278,9 @@ def compare_questions_qwen(context: str, original_question: str, original_answer
                            basic_question: str, basic_answer: str,
                            enhanced_question: str, enhanced_answer: str) -> Dict[str, Any]:
     try:
-        prompt = f"""You are an expert in evaluating question-answer pairs based on a given context.
-
-Compare the following two generated question-answer pairs based on the given context and the original question-answer pair. Evaluate their quality and relevance.
-
-Context: {context}
-
-Original Question: {original_question}
-Original Answer: {original_answer}
-
-Question 1: {enhanced_question}
-Answer 1: {enhanced_answer}
-
-Question 2: {basic_question}
-Answer 2: {basic_answer}
-
-Evaluate Question 1 and Question 2 based on the following criteria:
-1. Structural difference from the original question
-2. Semantic similarity to the original question
-3. How well the generated answer matches the original answer
-
-Score each question-answer pair on a scale of 0 to 10.
-
-Provide your answer in JSON format with the following structure:
-
-"question1_score": <number>,
-"question2_score": <number>,
-"explanation": "<string>",
-"winner": "<string>"  // Should be either "Question 1" or "Question 2", you must pick a winner, it cannot be a draw.
-
-Ensure that your response can be parsed as valid JSON.
-"""
+        prompt = PROMPT_TEMPLATE.format(context=context, original_question=original_question, 
+                                                  original_answer=original_answer, enhanced_question=enhanced_question, 
+                                                  enhanced_answer=enhanced_answer, basic_question=basic_question, basic_answer=basic_answer)
 
         messages = [{"role": "user", "content": prompt}]
         output = hf_client.chat.completions.create(
@@ -450,37 +316,9 @@ def compare_questions_llama(context: str, original_question: str, original_answe
                            basic_question: str, basic_answer: str,
                            enhanced_question: str, enhanced_answer: str) -> Dict[str, Any]:
     try:
-        prompt = f"""You are an expert in evaluating question-answer pairs based on a given context.
-
-Compare the following two generated question-answer pairs based on the given context and the original question-answer pair. Evaluate their quality and relevance.
-
-Context: {context}
-
-Original Question: {original_question}
-Original Answer: {original_answer}
-
-Question 1: {enhanced_question}
-Answer 1: {enhanced_answer}
-
-Question 2: {basic_question}
-Answer 2: {basic_answer}
-
-Evaluate Question 1 and Question 2 based on the following criteria:
-1. Structural difference from the original question
-2. Semantic similarity to the original question
-3. How well the generated answer matches the original answer
-
-Score each question-answer pair on a scale of 0 to 10.
-
-Provide your answer in JSON format with the following structure:
-
-"question1_score": <number>,
-"question2_score": <number>,
-"explanation": "<string>",
-"winner": "<string>"  // Should be either "Question 1" or "Question 2", you must pick a winner, it cannot be a draw.
-
-Ensure that your response can be parsed as valid JSON.
-"""
+        prompt = PROMPT_TEMPLATE.format(context=context, original_question=original_question, 
+                                                  original_answer=original_answer, enhanced_question=enhanced_question, 
+                                                  enhanced_answer=enhanced_answer, basic_question=basic_question, basic_answer=basic_answer)
 
         messages = [{"role": "user", "content": prompt}]
         output = hf_client.chat.completions.create(
@@ -582,16 +420,6 @@ def process_entry(entry):
 
     # Collect comparison results from each LLM judge
     comparison_results = {}
-
-    # # GPT-4o
-    # result_gpt4o = compare_questions_gpt4o(
-    #     context, original_question, answer,
-    #     basic_question, basic_answer,
-    #     enhanced_question, enhanced_answer
-    # )
-    # result['GPT-4o Verdict'] = result_gpt4o.get('winner', 'Error')
-    # if result_gpt4o['winner'] in vote_counts:
-    #     vote_counts[result_gpt4o['winner']] += 1
 
     # Claude
     result_claude = compare_questions_claude(
