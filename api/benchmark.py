@@ -86,6 +86,8 @@ def safe_api_call(func):
         return func(*args, **kwargs)
     return wrapper
 
+judge_temperature = 0.1
+
 PROMPT_TEMPLATE = '''You are an expert judge evaluating the quality of paraphrased questions based on a given context and original question-answer pair. Evaluate their quality and relevance.
 
 Context:
@@ -169,9 +171,9 @@ def compare_questions_claude(context: str, original_question: str, original_answ
 
         # Call the API with the structured output parameters
         response = claude_client.messages.create(
-            model="claude-3-5-sonnet-20240620",
+            model= "claude-3-5-haiku-20241022", # was "claude-3-5-sonnet-20240620"
             max_tokens=1024,
-            temperature=0.1,
+            temperature=judge_temperature,
             tools=[tool],
             tool_choice={"type": "tool", "name": "question_comparison_evaluator"},
             messages=messages
@@ -195,7 +197,7 @@ def compare_questions_cohere(context: str, original_question: str, original_answ
     try:
         res = cohere_client.chat(
             model="command-r-plus-08-2024",
-            temperature=0.1,
+            temperature=judge_temperature,
             messages=[
                 {
                     "role": "user",
@@ -254,7 +256,7 @@ def compare_questions_gemini(context: str, original_question: str, original_answ
             generation_config=genai.GenerationConfig(
                 response_mime_type="application/json",
                 response_schema=ComparisonResult,
-                temperature=0.1
+                temperature=judge_temperature
             ),
         )
         json_response = result.text.strip()
@@ -286,7 +288,7 @@ def compare_questions_qwen(context: str, original_question: str, original_answer
         output = hf_client.chat.completions.create(
             model="Qwen/Qwen2.5-72B-Instruct",
             messages=messages,
-            temperature=0.2,
+            temperature=judge_temperature,
             max_tokens=1024,
             top_p=0.7
         )
@@ -324,7 +326,7 @@ def compare_questions_llama(context: str, original_question: str, original_answe
         output = hf_client.chat.completions.create(
             model="meta-llama/Llama-3.1-70B-Instruct",
             messages=messages,
-            temperature=0.2,
+            temperature=judge_temperature,
             max_tokens=1024,
             top_p=0.7
         )
