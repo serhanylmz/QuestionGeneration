@@ -413,7 +413,8 @@ def process_entry(entry, idx_in_dataset, shuffle=False):
             'Gemini Verdict': None,
             'Qwen Verdict': None,
             'LLaMA Verdict': None,
-            'Final Verdict': None
+            'Final Verdict': None,
+            'Question Order': None
         })
         return result
 
@@ -463,6 +464,9 @@ def process_entry(entry, idx_in_dataset, shuffle=False):
         question_order = random.choice(['enhanced_first', 'basic_first'])
     else:
         question_order = 'enhanced_first'  # Default order
+
+    # Store question order in result
+    result['Question Order'] = question_order
 
     # Collect comparison results from each LLM judge
     comparison_results = {}
@@ -605,7 +609,7 @@ def main():
     total_vote_counts = Counter()
 
     fieldnames = ['Index', 'Context', 'Original Question', 'Original Answer', 'Basic Question', 'Basic Answer',
-                  'Enhanced Question', 'Enhanced Answer', 'Claude Verdict', 'Cohere Verdict',
+                  'Enhanced Question', 'Enhanced Answer', 'Question Order', 'Claude Verdict', 'Cohere Verdict',
                   'Gemini Verdict', 'Qwen Verdict', 'LLaMA Verdict','Final Verdict']
 
     # Open the CSV file for appending
@@ -674,3 +678,7 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         logger.info("Script interrupted by user.")
         sys.exit(0)
+
+
+# run the benchmark script
+# python benchmark.py --num_entries 1000 --random_seed 42 --shuffle
