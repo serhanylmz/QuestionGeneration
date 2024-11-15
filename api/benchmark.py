@@ -14,7 +14,7 @@ from tenacity import retry, wait_exponential, stop_after_attempt
 from collections import Counter
 from pydantic import BaseModel
 
-#python benchmark.py --num_entries 250 --random_seed 42  
+#python benchmark.py --num_entries 250 --random_seed 42
 
 # Import the required functions from the pipeline file
 from pipeline import generate_basic_question, rank_questions_with_details, generate_answer
@@ -96,11 +96,11 @@ Context:
 Original Question: {original_question}
 Original Answer: {original_answer}
 
-Question 1: {enhanced_question}
-Answer 1: {enhanced_answer}
+Question 1: {question1}
+Answer 1: {answer1}
 
-Question 2: {basic_question}
-Answer 2: {basic_answer}
+Question 2: {question2}
+Answer 2: {answer2}
 
 Evaluate Question 1 and Question 2 based on the following criteria:
 1. Structural difference from the original question - the question should use different wording and structure while maintaining the core intent
@@ -140,7 +140,8 @@ Your response must be a valid JSON object following this exact template. You mus
 @safe_api_call
 def compare_questions_claude(context: str, original_question: str, original_answer: str,
                              basic_question: str, basic_answer: str,
-                             enhanced_question: str, enhanced_answer: str) -> Dict[str, Any]:
+                             enhanced_question: str, enhanced_answer: str,
+                             question_order: str) -> Dict[str, Any]:
     try:
         # Define the tool (function) with the expected output schema
         tool = {
@@ -163,9 +164,15 @@ def compare_questions_claude(context: str, original_question: str, original_answ
         messages = [
             {
                 "role": "user",
-                "content": PROMPT_TEMPLATE.format(context=context, original_question=original_question, 
-                                                  original_answer=original_answer, enhanced_question=enhanced_question, 
-                                                  enhanced_answer=enhanced_answer, basic_question=basic_question, basic_answer=basic_answer)
+                "content": PROMPT_TEMPLATE.format(
+                    context=context,
+                    original_question=original_question,
+                    original_answer=original_answer,
+                    question1=enhanced_question if question_order == 'enhanced_first' else basic_question,
+                    answer1=enhanced_answer if question_order == 'enhanced_first' else basic_answer,
+                    question2=basic_question if question_order == 'enhanced_first' else enhanced_question,
+                    answer2=basic_answer if question_order == 'enhanced_first' else enhanced_answer,
+                )
             }
         ]
 
@@ -193,7 +200,8 @@ def compare_questions_claude(context: str, original_question: str, original_answ
 @safe_api_call
 def compare_questions_cohere(context: str, original_question: str, original_answer: str,
                              basic_question: str, basic_answer: str,
-                             enhanced_question: str, enhanced_answer: str) -> Dict[str, Any]:
+                             enhanced_question: str, enhanced_answer: str,
+                             question_order: str) -> Dict[str, Any]:
     try:
         res = cohere_client.chat(
             model="command-r-plus-08-2024",
@@ -201,9 +209,15 @@ def compare_questions_cohere(context: str, original_question: str, original_answ
             messages=[
                 {
                     "role": "user",
-                    "content": PROMPT_TEMPLATE.format(context=context, original_question=original_question, 
-                                                  original_answer=original_answer, enhanced_question=enhanced_question, 
-                                                  enhanced_answer=enhanced_answer, basic_question=basic_question, basic_answer=basic_answer)
+                    "content": PROMPT_TEMPLATE.format(
+                        context=context,
+                        original_question=original_question,
+                        original_answer=original_answer,
+                        question1=enhanced_question if question_order == 'enhanced_first' else basic_question,
+                        answer1=enhanced_answer if question_order == 'enhanced_first' else basic_answer,
+                        question2=basic_question if question_order == 'enhanced_first' else enhanced_question,
+                        answer2=basic_answer if question_order == 'enhanced_first' else enhanced_answer,
+                    )
                 }
             ],
             response_format={
@@ -245,11 +259,18 @@ class ComparisonResult(BaseModel):
 @safe_api_call
 def compare_questions_gemini(context: str, original_question: str, original_answer: str,
                              basic_question: str, basic_answer: str,
-                             enhanced_question: str, enhanced_answer: str) -> Dict[str, Any]:
+                             enhanced_question: str, enhanced_answer: str,
+                             question_order: str) -> Dict[str, Any]:
     try:
-        prompt = PROMPT_TEMPLATE.format(context=context, original_question=original_question, 
-                                                  original_answer=original_answer, enhanced_question=enhanced_question, 
-                                                  enhanced_answer=enhanced_answer, basic_question=basic_question, basic_answer=basic_answer)
+        prompt = PROMPT_TEMPLATE.format(
+            context=context,
+            original_question=original_question,
+            original_answer=original_answer,
+            question1=enhanced_question if question_order == 'enhanced_first' else basic_question,
+            answer1=enhanced_answer if question_order == 'enhanced_first' else basic_answer,
+            question2=basic_question if question_order == 'enhanced_first' else enhanced_question,
+            answer2=basic_answer if question_order == 'enhanced_first' else enhanced_answer,
+        )
 
         result = gemini_model.generate_content(
             prompt,
@@ -278,11 +299,18 @@ def compare_questions_gemini(context: str, original_question: str, original_answ
 @safe_api_call
 def compare_questions_qwen(context: str, original_question: str, original_answer: str,
                            basic_question: str, basic_answer: str,
-                           enhanced_question: str, enhanced_answer: str) -> Dict[str, Any]:
+                           enhanced_question: str, enhanced_answer: str,
+                           question_order: str) -> Dict[str, Any]:
     try:
-        prompt = PROMPT_TEMPLATE.format(context=context, original_question=original_question, 
-                                                  original_answer=original_answer, enhanced_question=enhanced_question, 
-                                                  enhanced_answer=enhanced_answer, basic_question=basic_question, basic_answer=basic_answer)
+        prompt = PROMPT_TEMPLATE.format(
+            context=context,
+            original_question=original_question,
+            original_answer=original_answer,
+            question1=enhanced_question if question_order == 'enhanced_first' else basic_question,
+            answer1=enhanced_answer if question_order == 'enhanced_first' else basic_answer,
+            question2=basic_question if question_order == 'enhanced_first' else enhanced_question,
+            answer2=basic_answer if question_order == 'enhanced_first' else enhanced_answer,
+        )
 
         messages = [{"role": "user", "content": prompt}]
         output = hf_client.chat.completions.create(
@@ -316,11 +344,18 @@ def compare_questions_qwen(context: str, original_question: str, original_answer
 @safe_api_call
 def compare_questions_llama(context: str, original_question: str, original_answer: str,
                            basic_question: str, basic_answer: str,
-                           enhanced_question: str, enhanced_answer: str) -> Dict[str, Any]:
+                           enhanced_question: str, enhanced_answer: str,
+                           question_order: str) -> Dict[str, Any]:
     try:
-        prompt = PROMPT_TEMPLATE.format(context=context, original_question=original_question, 
-                                                  original_answer=original_answer, enhanced_question=enhanced_question, 
-                                                  enhanced_answer=enhanced_answer, basic_question=basic_question, basic_answer=basic_answer)
+        prompt = PROMPT_TEMPLATE.format(
+            context=context,
+            original_question=original_question,
+            original_answer=original_answer,
+            question1=enhanced_question if question_order == 'enhanced_first' else basic_question,
+            answer1=enhanced_answer if question_order == 'enhanced_first' else basic_answer,
+            question2=basic_question if question_order == 'enhanced_first' else enhanced_question,
+            answer2=basic_answer if question_order == 'enhanced_first' else enhanced_answer,
+        )
 
         messages = [{"role": "user", "content": prompt}]
         output = hf_client.chat.completions.create(
@@ -351,8 +386,11 @@ def compare_questions_llama(context: str, original_question: str, original_answe
         logger.error(f"Error in comparing questions with LLaMA: {e}")
         return {"question1_score": 0, "question2_score": 0, "explanation": "Failed to compare questions", "winner": "None"}
 
-def process_entry(entry):
+def process_entry(entry, idx_in_dataset, shuffle=False):
     result = {}  # Initialize the result dict
+
+    # Set random seed per instance for consistent shuffling
+    random.seed(idx_in_dataset)
 
     # Extract data from entry
     try:
@@ -418,7 +456,13 @@ def process_entry(entry):
     result['Enhanced Answer'] = enhanced_answer
 
     # Initialize vote counts
-    vote_counts = {"Question 1": 0, "Question 2": 0}
+    vote_counts = {"Enhanced": 0, "Basic": 0}
+
+    # Determine question order
+    if shuffle:
+        question_order = random.choice(['enhanced_first', 'basic_first'])
+    else:
+        question_order = 'enhanced_first'  # Default order
 
     # Collect comparison results from each LLM judge
     comparison_results = {}
@@ -427,60 +471,101 @@ def process_entry(entry):
     result_claude = compare_questions_claude(
         context, original_question, answer,
         basic_question, basic_answer,
-        enhanced_question, enhanced_answer
+        enhanced_question, enhanced_answer,
+        question_order
     )
-    result['Claude Verdict'] = result_claude.get('winner', 'Error')
-    if result_claude['winner'] in vote_counts:
-        vote_counts[result_claude['winner']] += 1
+    winner_claude = result_claude.get('winner', 'Error')
+    # Map the winner back to 'Enhanced' or 'Basic'
+    if winner_claude == 'Question 1':
+        winner_mapped = 'Enhanced' if question_order == 'enhanced_first' else 'Basic'
+    elif winner_claude == 'Question 2':
+        winner_mapped = 'Basic' if question_order == 'enhanced_first' else 'Enhanced'
+    else:
+        winner_mapped = 'Error'
+    result['Claude Verdict'] = winner_mapped
+    if winner_mapped in vote_counts:
+        vote_counts[winner_mapped] += 1
 
     # Cohere
     result_cohere = compare_questions_cohere(
         context, original_question, answer,
         basic_question, basic_answer,
-        enhanced_question, enhanced_answer
+        enhanced_question, enhanced_answer,
+        question_order
     )
-    result['Cohere Verdict'] = result_cohere.get('winner', 'Error')
-    if result_cohere['winner'] in vote_counts:
-        vote_counts[result_cohere['winner']] += 1
+    winner_cohere = result_cohere.get('winner', 'Error')
+    if winner_cohere == 'Question 1':
+        winner_mapped = 'Enhanced' if question_order == 'enhanced_first' else 'Basic'
+    elif winner_cohere == 'Question 2':
+        winner_mapped = 'Basic' if question_order == 'enhanced_first' else 'Enhanced'
+    else:
+        winner_mapped = 'Error'
+    result['Cohere Verdict'] = winner_mapped
+    if winner_mapped in vote_counts:
+        vote_counts[winner_mapped] += 1
 
     # Gemini
     result_gemini = compare_questions_gemini(
         context, original_question, answer,
         basic_question, basic_answer,
-        enhanced_question, enhanced_answer
+        enhanced_question, enhanced_answer,
+        question_order
     )
-    result['Gemini Verdict'] = result_gemini.get('winner', 'Error')
-    if result_gemini['winner'] in vote_counts:
-        vote_counts[result_gemini['winner']] += 1
+    winner_gemini = result_gemini.get('winner', 'Error')
+    if winner_gemini == 'Question 1':
+        winner_mapped = 'Enhanced' if question_order == 'enhanced_first' else 'Basic'
+    elif winner_gemini == 'Question 2':
+        winner_mapped = 'Basic' if question_order == 'enhanced_first' else 'Enhanced'
+    else:
+        winner_mapped = 'Error'
+    result['Gemini Verdict'] = winner_mapped
+    if winner_mapped in vote_counts:
+        vote_counts[winner_mapped] += 1
 
     # Qwen
     result_qwen = compare_questions_qwen(
         context, original_question, answer,
         basic_question, basic_answer,
-        enhanced_question, enhanced_answer
+        enhanced_question, enhanced_answer,
+        question_order
     )
-    result['Qwen Verdict'] = result_qwen.get('winner', 'Error')
-    if result_qwen['winner'] in vote_counts:
-        vote_counts[result_qwen['winner']] += 1
+    winner_qwen = result_qwen.get('winner', 'Error')
+    if winner_qwen == 'Question 1':
+        winner_mapped = 'Enhanced' if question_order == 'enhanced_first' else 'Basic'
+    elif winner_qwen == 'Question 2':
+        winner_mapped = 'Basic' if question_order == 'enhanced_first' else 'Enhanced'
+    else:
+        winner_mapped = 'Error'
+    result['Qwen Verdict'] = winner_mapped
+    if winner_mapped in vote_counts:
+        vote_counts[winner_mapped] += 1
 
     # LLaMA
     result_llama = compare_questions_llama(
         context, original_question, answer,
         basic_question, basic_answer,
-        enhanced_question, enhanced_answer
+        enhanced_question, enhanced_answer,
+        question_order
     )
-    result['LLaMA Verdict'] = result_llama.get('winner', 'Error')
-    if result_llama['winner'] in vote_counts:
-        vote_counts[result_llama['winner']] += 1
+    winner_llama = result_llama.get('winner', 'Error')
+    if winner_llama == 'Question 1':
+        winner_mapped = 'Enhanced' if question_order == 'enhanced_first' else 'Basic'
+    elif winner_llama == 'Question 2':
+        winner_mapped = 'Basic' if question_order == 'enhanced_first' else 'Enhanced'
+    else:
+        winner_mapped = 'Error'
+    result['LLaMA Verdict'] = winner_mapped
+    if winner_mapped in vote_counts:
+        vote_counts[winner_mapped] += 1
 
     # Determine final verdict
     try:
-        final_verdict_key = max(vote_counts, key=vote_counts.get)
-        if vote_counts['Question 1'] == vote_counts['Question 2']:
-            final_verdict = 'Draw'
+        if vote_counts['Enhanced'] > vote_counts['Basic']:
+            final_verdict = 'Enhanced'
+        elif vote_counts['Basic'] > vote_counts['Enhanced']:
+            final_verdict = 'Basic'
         else:
-            # Map 'Question 1' to 'Enhanced', 'Question 2' to 'Basic'
-            final_verdict = 'Enhanced' if final_verdict_key == 'Question 1' else 'Basic'
+            final_verdict = 'Draw'
     except Exception as e:
         logger.error(f"Error determining final verdict: {e}")
         final_verdict = 'Error'
@@ -493,6 +578,7 @@ def main():
     parser.add_argument('--num_entries', type=str, default='all', help='Number of entries to process')
     parser.add_argument('--random_seed', type=int, default=42, help='Random seed')
     parser.add_argument('--entries_file', type=str, default='benchmark_results.csv', help='CSV file to store results')
+    parser.add_argument('--shuffle', action='store_true', help='Shuffle the order of questions in each instance')
     args = parser.parse_args()
 
     # Generate the indices based on the random seed and num_entries
@@ -536,24 +622,18 @@ def main():
         ):
             print(f"Processing entry {idx_in_entries + 1}/{len(indices_to_process)} (Dataset Index: {idx_in_dataset})...")
             try:
-                result = process_entry(entry)
+                result = process_entry(entry, idx_in_dataset=idx_in_dataset, shuffle=args.shuffle)
                 result['Index'] = idx_in_dataset  # Add the index to the result
                 # Write result to CSV
                 writer.writerow(result)
                 csvfile.flush()
                 os.fsync(csvfile.fileno())
                 # Update total vote counts
-                for key in ['Question 1', 'Question 2']:
-                    total_votes = sum(
-                        1 for verdict in [
-                            result.get('Claude Verdict'),
-                            result.get('Cohere Verdict'),
-                            result.get('Gemini Verdict'),
-                            result.get('Qwen Verdict'),
-                            result.get('LLaMA Verdict')
-                        ] if verdict == key
+                for verdict in ['Enhanced', 'Basic']:
+                    total_vote_counts[verdict] += sum(
+                        1 for judge in ['Claude Verdict', 'Cohere Verdict', 'Gemini Verdict', 'Qwen Verdict', 'LLaMA Verdict']
+                        if result.get(judge) == verdict
                     )
-                    total_vote_counts[key] += total_votes
             except Exception as e:
                 logger.error(f"Error processing entry {idx_in_dataset}: {e}")
                 continue
@@ -572,8 +652,8 @@ def main():
 Total Entries Processed: {total_entries_processed}
 
 Vote Counts:
-Question 1 (Enhanced) Votes: {total_vote_counts['Question 1']}
-Question 2 (Basic) Votes: {total_vote_counts['Question 2']}
+Enhanced Votes: {total_vote_counts['Enhanced']}
+Basic Votes: {total_vote_counts['Basic']}
 
 Final Verdicts:
 Enhanced Generation Wins: {final_verdicts.get('Enhanced', 0)} ({percentage_enhanced:.2f}%)
